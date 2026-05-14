@@ -1,0 +1,11 @@
+# Never commit these!
+.env
+.streamlit/secrets.toml
+venv/
+__pycache__/
+*.pyc
+*.pyo
+data/rentcast_cache/
+logs/
+*.log
+data/*.db

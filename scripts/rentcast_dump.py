@@ -1,8 +1,7 @@
 # scripts/rentcast_dump.py
 # BRI RentCast Bi-Weekly Data Dump
-# Pulls active + leased listings for all Boise area ZIP codes
-# Stores in Supabase rentcast_listings table
-# Run every Sunday and Wednesday at 10PM via Windows Task Scheduler
+# Fixed: Reconnects to database for each ZIP to prevent timeout
+# Pulls ONLY leased (Inactive) listings for all Boise area ZIP codes
 
 import os
 import sys
@@ -11,15 +10,15 @@ import psycopg2
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env'))
+load_dotenv(os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), '.env'
+))
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
-# Boise area ZIP codes to pull data for
 BOISE_ZIP_CODES = [
     '83702',  # Boise - North End, Downtown
     '83703',  # Boise - Garden City, Northwest
@@ -37,14 +36,11 @@ BOISE_ZIP_CODES = [
     '83669',  # Star
 ]
 
-# Property types to pull (RentCast format - case sensitive!)
 PROPERTY_TYPES = "Single Family|Townhouse|Condo|Multi-Family"
-
-# RentCast API settings
+RESULTS_LIMIT = 500
 RENTCAST_BASE_URL = "https://api.rentcast.io/v1"
 RENTCAST_API_KEY = os.getenv('RENTCAST_API_KEY')
 
-# Supabase connection settings
 SUPABASE_CONFIG = {
     'host': os.getenv('SUPABASE_HOST'),
     'database': os.getenv('SUPABASE_DB'),
@@ -59,201 +55,247 @@ SUPABASE_CONFIG = {
 # RENTCAST API FUNCTIONS
 # ============================================================
 
-def get_rentcast_headers():
-    """Get RentCast API headers."""
+def get_headers():
     return {
         "accept": "application/json",
         "X-Api-Key": RENTCAST_API_KEY
     }
 
-def fetch_listings_by_zip(zip_code, status="Active", limit=100):
-    """
-    Fetch rental listings for a specific ZIP code from RentCast.
-    
-    Args:
-        zip_code: 5-digit ZIP code
-        status: 'Active' or 'Inactive' (leased)
-        limit: Max results (up to 500)
-    
-    Returns:
-        List of listing dictionaries or empty list on error
-    """
+def fetch_leased_listings(zip_code, limit=500, offset=0):
+    """Fetch leased listings for a ZIP code with pagination."""
     params = {
         "zipCode": zip_code,
-        "status": status,
+        "status": "Inactive",
         "propertyType": PROPERTY_TYPES,
-        "limit": limit
+        "limit": limit,
+        "offset": offset
     }
 
     try:
         response = requests.get(
             f"{RENTCAST_BASE_URL}/listings/rental/long-term",
-            headers=get_rentcast_headers(),
+            headers=get_headers(),
             params=params,
             timeout=30
         )
 
         if response.status_code == 200:
-            listings = response.json()
-            return listings if isinstance(listings, list) else []
+            data = response.json()
+            return data if isinstance(data, list) else []
         elif response.status_code == 401:
-            print(f"    ERROR: Invalid API key - check RENTCAST_API_KEY in .env")
+            print(f"    ERROR: Invalid API key!")
             return []
         elif response.status_code == 429:
-            print(f"    ERROR: Rate limit exceeded - too many API calls")
-            return []
-        elif response.status_code == 404:
-            print(f"    No listings found for ZIP {zip_code} (status={status})")
+            print(f"    ERROR: Rate limit exceeded!")
             return []
         else:
-            print(f"    ERROR: {response.status_code} - {response.text[:100]}")
+            print(f"    ERROR: {response.status_code}")
             return []
 
     except requests.Timeout:
-        print(f"    TIMEOUT: ZIP {zip_code} took too long")
+        print(f"    TIMEOUT for ZIP {zip_code}")
         return []
     except Exception as e:
         print(f"    EXCEPTION: {str(e)}")
         return []
 
+def fetch_all_leased_with_pagination(zip_code):
+    """Fetch ALL leased listings using pagination."""
+    all_listings = []
+    offset = 0
+    page = 1
+
+    while True:
+        print(f"    Page {page} (offset={offset})...")
+        listings = fetch_leased_listings(
+            zip_code=zip_code,
+            limit=RESULTS_LIMIT,
+            offset=offset
+        )
+
+        if not listings:
+            break
+
+        all_listings.extend(listings)
+        print(f"    Got {len(listings)} records "
+              f"(total so far: {len(all_listings)})")
+
+        if len(listings) < RESULTS_LIMIT:
+            break
+
+        offset += RESULTS_LIMIT
+        page += 1
+
+        if page > 10:
+            print(f"    Reached max pages for ZIP {zip_code}")
+            break
+
+    return all_listings
+
 # ============================================================
-# DATABASE FUNCTIONS
+# DATABASE FUNCTIONS - Reconnect for each ZIP!
 # ============================================================
 
-def get_db_connection():
-    """Get Supabase PostgreSQL connection."""
+def get_fresh_connection():
+    """
+    Get a FRESH database connection.
+    Called for each ZIP code to prevent timeout issues.
+    """
     return psycopg2.connect(**SUPABASE_CONFIG)
 
-def upsert_listings(conn, listings, dump_date, status):
+def upsert_listings_with_reconnect(listings, dump_date):
     """
-    Upsert listings into rentcast_listings table.
-    Uses ON CONFLICT to update existing records.
-    
-    Args:
-        conn: Database connection
-        listings: List of RentCast listing dictionaries
-        dump_date: Date string for this dump (YYYY-MM-DD)
-        status: 'Active' or 'Leased'
-    
-    Returns:
-        Number of records upserted
+    Upsert listings with a fresh connection per batch.
+    Reconnects every 100 records to prevent timeout.
+    Returns (inserted, updated) counts.
     """
     if not listings:
-        return 0
+        return 0, 0
 
-    cursor = conn.cursor()
-    upserted = 0
+    inserted = 0
+    updated = 0
+    batch_size = 100  # Reconnect every 100 records
 
-    for listing in listings:
-        # Get listing ID (RentCast's unique identifier)
-        listing_id = listing.get('id', '')
-        if not listing_id:
-            continue
+    for batch_start in range(0, len(listings), batch_size):
+        batch = listings[batch_start:batch_start + batch_size]
 
-        # Get last seen date safely
-        last_seen = listing.get('lastSeenDate', '')
-        if last_seen and len(last_seen) >= 10:
-            last_seen = last_seen[:10]
-
-        # Get listed date safely
-        listed_date = listing.get('listedDate', '')
-        if listed_date and len(listed_date) >= 10:
-            listed_date = listed_date[:10]
-
-        # Get removed date safely
-        removed_date = listing.get('removedDate', '')
-        if removed_date and len(removed_date) >= 10:
-            removed_date = removed_date[:10]
-
+        # Fresh connection for each batch
         try:
-            cursor.execute("""
-                INSERT INTO rentcast_listings (
-                    id, formatted_address, address_line1, address_line2,
-                    city, state, zip_code, county,
-                    latitude, longitude,
-                    property_type, bedrooms, bathrooms,
-                    square_footage, lot_size, year_built,
-                    status, price, listing_type,
-                    listed_date, removed_date, last_seen_date,
-                    days_on_market, mls_name, mls_number,
-                    dump_date, updated_at
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s,
-                    %s, %s, %s,
-                    %s, NOW()
-                )
-                ON CONFLICT (id) DO UPDATE SET
-                    status = EXCLUDED.status,
-                    price = EXCLUDED.price,
-                    last_seen_date = EXCLUDED.last_seen_date,
-                    removed_date = EXCLUDED.removed_date,
-                    days_on_market = EXCLUDED.days_on_market,
-                    dump_date = EXCLUDED.dump_date,
-                    updated_at = NOW()
-            """, (
-                listing_id,
-                listing.get('formattedAddress', ''),
-                listing.get('addressLine1', ''),
-                listing.get('addressLine2', ''),
-                listing.get('city', ''),
-                listing.get('state', ''),
-                listing.get('zipCode', ''),
-                listing.get('county', ''),
-                listing.get('latitude'),
-                listing.get('longitude'),
-                listing.get('propertyType', ''),
-                listing.get('bedrooms'),
-                listing.get('bathrooms'),
-                listing.get('squareFootage'),
-                listing.get('lotSize'),
-                listing.get('yearBuilt'),
-                status,
-                listing.get('price'),
-                listing.get('listingType', ''),
-                listed_date or None,
-                removed_date or None,
-                last_seen or None,
-                listing.get('daysOnMarket'),
-                listing.get('mlsName', ''),
-                listing.get('mlsNumber', ''),
-                dump_date
-            ))
-            upserted += 1
-
+            conn = get_fresh_connection()
+            cursor = conn.cursor()
         except Exception as e:
-            print(f"    DB Error for {listing_id}: {str(e)[:100]}")
-            conn.rollback()
+            print(f"    Connection failed: {str(e)}")
             continue
 
-    conn.commit()
-    cursor.close()
-    return upserted
+        for listing in batch:
+            listing_id = listing.get('id', '')
+            if not listing_id:
+                continue
 
-def get_table_stats(conn):
-    """Get current stats from rentcast_listings table."""
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT 
-            COUNT(*) as total,
-            COUNT(CASE WHEN status = 'Active' THEN 1 END) as active,
-            COUNT(CASE WHEN status = 'Inactive' THEN 1 END) as inactive,
-            MAX(dump_date) as last_dump
-        FROM rentcast_listings
-    """)
-    row = cursor.fetchone()
-    cursor.close()
-    return {
-        'total': row[0],
-        'active': row[1],
-        'inactive': row[2],
-        'last_dump': row[3]
-    }
+            # Safely extract dates
+            last_seen = listing.get('lastSeenDate', '')
+            last_seen = last_seen[:10] if last_seen and len(last_seen) >= 10 else None
+
+            listed_date = listing.get('listedDate', '')
+            listed_date = listed_date[:10] if listed_date and len(listed_date) >= 10 else None
+
+            removed_date = listing.get('removedDate', '')
+            removed_date = removed_date[:10] if removed_date and len(removed_date) >= 10 else None
+
+            try:
+                # Check if exists
+                cursor.execute(
+                    "SELECT id FROM rentcast_listings WHERE id = %s",
+                    (listing_id,)
+                )
+                exists = cursor.fetchone()
+
+                cursor.execute("""
+                    INSERT INTO rentcast_listings (
+                        id, formatted_address, address_line1,
+                        address_line2, city, state, zip_code,
+                        county, latitude, longitude,
+                        property_type, bedrooms, bathrooms,
+                        square_footage, lot_size, year_built,
+                        status, price, listing_type,
+                        listed_date, removed_date, last_seen_date,
+                        days_on_market, mls_name, mls_number,
+                        dump_date, updated_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, NOW()
+                    )
+                    ON CONFLICT (id) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        price = EXCLUDED.price,
+                        last_seen_date = EXCLUDED.last_seen_date,
+                        removed_date = EXCLUDED.removed_date,
+                        days_on_market = EXCLUDED.days_on_market,
+                        dump_date = EXCLUDED.dump_date,
+                        updated_at = NOW()
+                """, (
+                    listing_id,
+                    listing.get('formattedAddress', ''),
+                    listing.get('addressLine1', ''),
+                    listing.get('addressLine2', ''),
+                    listing.get('city', ''),
+                    listing.get('state', ''),
+                    listing.get('zipCode', ''),
+                    listing.get('county', ''),
+                    listing.get('latitude'),
+                    listing.get('longitude'),
+                    listing.get('propertyType', ''),
+                    listing.get('bedrooms'),
+                    listing.get('bathrooms'),
+                    listing.get('squareFootage'),
+                    listing.get('lotSize'),
+                    listing.get('yearBuilt'),
+                    'Inactive',
+                    listing.get('price'),
+                    listing.get('listingType', ''),
+                    listed_date,
+                    removed_date,
+                    last_seen,
+                    listing.get('daysOnMarket'),
+                    listing.get('mlsName', ''),
+                    listing.get('mlsNumber', ''),
+                    dump_date
+                ))
+
+                if exists:
+                    updated += 1
+                else:
+                    inserted += 1
+
+            except Exception as e:
+                print(f"    DB Error for {listing_id}: "
+                      f"{str(e)[:60]}")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                continue
+
+        # Commit and close this batch connection
+        try:
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"    Commit error: {str(e)[:60]}")
+
+        print(f"    Batch {batch_start//batch_size + 1} saved "
+              f"({min(batch_start + batch_size, len(listings))}"
+              f"/{len(listings)} records)")
+
+    return inserted, updated
+
+def get_table_stats():
+    """Get current stats - uses fresh connection."""
+    try:
+        conn = get_fresh_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total,
+                COUNT(CASE WHEN status = 'Active'
+                      THEN 1 END) as active,
+                COUNT(CASE WHEN status = 'Inactive'
+                      THEN 1 END) as leased,
+                MAX(dump_date) as last_dump
+            FROM rentcast_listings
+        """)
+        row = cursor.fetchone()
+        conn.close()
+        return {
+            'total': row[0],
+            'active': row[1],
+            'leased': row[2],
+            'last_dump': row[3]
+        }
+    except Exception as e:
+        print(f"Stats error: {str(e)}")
+        return {'total': 0, 'active': 0, 'leased': 0, 'last_dump': None}
 
 # ============================================================
 # MAIN DUMP FUNCTION
@@ -261,94 +303,77 @@ def get_table_stats(conn):
 
 def run_rentcast_dump():
     """
-    Main function: Pull all RentCast data for Boise area ZIP codes
-    and store in Supabase.
+    Main function: Pull all RentCast leased data for Boise area.
+    Uses fresh database connection per ZIP to prevent timeouts.
     """
     start_time = datetime.now()
     dump_date = start_time.strftime('%Y-%m-%d')
 
     print("=" * 70)
-    print("BRI RENTCAST BI-WEEKLY DATA DUMP")
+    print("BRI RENTCAST LEASED PROPERTY DUMP")
     print("=" * 70)
-    print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Start: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Dump date: {dump_date}")
     print(f"ZIP codes: {len(BOISE_ZIP_CODES)}")
-    print(f"API Key: {RENTCAST_API_KEY[:20]}..." if RENTCAST_API_KEY else "NO API KEY!")
+    print(f"Results per page: {RESULTS_LIMIT}")
+    print(f"Status: Inactive (Leased) ONLY")
+    print(f"Connection: Fresh per ZIP (prevents timeout!)")
     print("=" * 70)
 
     if not RENTCAST_API_KEY:
-        print("ERROR: RENTCAST_API_KEY not found in .env file!")
+        print("ERROR: RENTCAST_API_KEY not found in .env!")
         return False
 
-    # Connect to Supabase
-    print("\n[1] Connecting to Supabase...")
-    try:
-        conn = get_db_connection()
-        print("    Connected successfully!")
-    except Exception as e:
-        print(f"    CONNECTION FAILED: {str(e)}")
-        return False
+    # Get starting stats
+    print("\n[1] Getting current database stats...")
+    before_stats = get_table_stats()
+    print(f"    Current leased records: {before_stats['leased']:,}")
 
     # Track totals
-    total_active = 0
-    total_leased = 0
+    total_fetched = 0
+    total_inserted = 0
+    total_updated = 0
     total_api_calls = 0
     zip_results = []
 
-    # Process each ZIP code
     print(f"\n[2] Processing {len(BOISE_ZIP_CODES)} ZIP codes...")
     print("-" * 70)
 
     for i, zip_code in enumerate(BOISE_ZIP_CODES, 1):
         print(f"\n  ZIP {zip_code} ({i}/{len(BOISE_ZIP_CODES)}):")
 
-        # Fetch ACTIVE listings
-        print(f"    Fetching active listings...")
-        active_listings = fetch_listings_by_zip(
-            zip_code=zip_code,
-            status="Active",
-            limit=100
-        )
-        total_api_calls += 1
-        print(f"    Found {len(active_listings)} active listings")
+        # Fetch listings from RentCast
+        listings = fetch_all_leased_with_pagination(zip_code)
+        pages = max(1, (len(listings) // RESULTS_LIMIT) + 1)
+        total_api_calls += pages
 
-        # Upsert active listings
-        active_upserted = upsert_listings(
-            conn, active_listings, dump_date, "Active"
-        )
-        print(f"    Saved {active_upserted} active listings to Supabase")
+        print(f"    Total fetched: {len(listings)} leased listings")
 
-        # Fetch INACTIVE (leased) listings
-        print(f"    Fetching leased listings...")
-        leased_listings = fetch_listings_by_zip(
-            zip_code=zip_code,
-            status="Inactive",
-            limit=100
-        )
-        total_api_calls += 1
-        print(f"    Found {len(leased_listings)} leased listings")
+        # Save with fresh connection per batch
+        if listings:
+            inserted, updated = upsert_listings_with_reconnect(
+                listings, dump_date
+            )
+            print(f"    Saved: {inserted} new, {updated} updated")
+        else:
+            inserted, updated = 0, 0
+            print(f"    No listings to save")
 
-        # Upsert leased listings
-        leased_upserted = upsert_listings(
-            conn, leased_listings, dump_date, "Inactive"
-        )
-        print(f"    Saved {leased_upserted} leased listings to Supabase")
+        total_fetched += len(listings)
+        total_inserted += inserted
+        total_updated += updated
 
-        # Track results
-        total_active += active_upserted
-        total_leased += leased_upserted
         zip_results.append({
             'zip': zip_code,
-            'active': active_upserted,
-            'leased': leased_upserted
+            'fetched': len(listings),
+            'inserted': inserted,
+            'updated': updated
         })
 
-    # Get final table stats
-    print("\n[3] Getting final table statistics...")
-    stats = get_table_stats(conn)
-    conn.close()
+    # Final stats
+    print("\n[3] Getting final statistics...")
+    after_stats = get_table_stats()
 
-    # Summary report
     end_time = datetime.now()
     duration = (end_time - start_time).seconds
 
@@ -357,31 +382,28 @@ def run_rentcast_dump():
     print("=" * 70)
     print(f"\nDump Date: {dump_date}")
     print(f"Duration: {duration} seconds")
-    print(f"Total API Calls Used: {total_api_calls}")
+    print(f"API Calls Used: {total_api_calls}")
     print(f"\nThis Dump:")
-    print(f"  Active listings saved: {total_active}")
-    print(f"  Leased listings saved: {total_leased}")
-    print(f"  Total saved: {total_active + total_leased}")
+    print(f"  Records fetched: {total_fetched:,}")
+    print(f"  New records: {total_inserted:,}")
+    print(f"  Updated records: {total_updated:,}")
     print(f"\nDatabase Totals:")
-    print(f"  Total records: {stats['total']:,}")
-    print(f"  Active listings: {stats['active']:,}")
-    print(f"  Leased listings: {stats['inactive']:,}")
-    print(f"  Last dump date: {stats['last_dump']}")
+    print(f"  Total leased records: {after_stats['leased']:,}")
+    print(f"  Previous count: {before_stats['leased']:,}")
+    net_new = after_stats['leased'] - before_stats['leased']
+    print(f"  Net new records: {net_new:,}")
     print(f"\nZIP Code Breakdown:")
-    print(f"  {'ZIP':<10} {'Active':<10} {'Leased':<10} {'Total':<10}")
-    print(f"  {'-'*40}")
+    print(f"  {'ZIP':<10} {'Fetched':<10} {'New':<10} {'Updated':<10}")
+    print(f"  {'-'*42}")
     for r in zip_results:
-        total = r['active'] + r['leased']
-        print(f"  {r['zip']:<10} {r['active']:<10} {r['leased']:<10} {total:<10}")
+        print(f"  {r['zip']:<10} {r['fetched']:<10} "
+              f"{r['inserted']:<10} {r['updated']:<10}")
     print("=" * 70)
-    print("BRI RentCast dump completed successfully!")
+    print("RentCast dump completed successfully!")
+    print(f"Total leased comps available: {after_stats['leased']:,}")
     print("=" * 70)
 
     return True
-
-# ============================================================
-# RUN THE DUMP
-# ============================================================
 
 if __name__ == "__main__":
     success = run_rentcast_dump()
