@@ -17,6 +17,10 @@ from config.database import (
     save_one_off_search,
     get_recent_one_off_searches
 )
+# NEW (works everywhere):
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from app.bri_ai_engine import analyze_property
 
 # Page config
