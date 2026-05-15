@@ -12,13 +12,30 @@ from decimal import Decimal
 load_dotenv()
 
 def get_connection():
-    """Get PostgreSQL connection to Supabase."""
+    """
+    Get PostgreSQL connection to Supabase.
+    Works locally (uses .env) AND on Streamlit Cloud (uses secrets).
+    """
+    try:
+        import streamlit as st
+        host = st.secrets["SUPABASE_HOST"]
+        database = st.secrets["SUPABASE_DB"]
+        user = st.secrets["SUPABASE_USER"]
+        password = st.secrets["SUPABASE_PASSWORD"]
+        port = int(st.secrets["SUPABASE_PORT"])
+    except Exception:
+        host = os.getenv('SUPABASE_HOST')
+        database = os.getenv('SUPABASE_DB')
+        user = os.getenv('SUPABASE_USER')
+        password = os.getenv('SUPABASE_PASSWORD')
+        port = int(os.getenv('SUPABASE_PORT', 5432))
+
     return psycopg2.connect(
-        host=os.getenv('SUPABASE_HOST'),
-        database=os.getenv('SUPABASE_DB'),
-        user=os.getenv('SUPABASE_USER'),
-        password=os.getenv('SUPABASE_PASSWORD'),
-        port=int(os.getenv('SUPABASE_PORT', 5432)),
+        host=host,
+        database=database,
+        user=user,
+        password=password,
+        port=port,
         sslmode='require',
         connect_timeout=10
     )

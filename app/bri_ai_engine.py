@@ -228,8 +228,14 @@ def analyze_property(subject, radius_miles=3.0,
 
     # STEP 4: Claude AI analysis
     print(f"\n[4] Sending to Claude AI...")
-    client = anthropic.Anthropic(
-        api_key=os.getenv('CLAUDE_API_KEY')
+        # Get API key - works locally AND on Streamlit Cloud
+    try:
+        import streamlit as st
+        api_key = st.secrets["CLAUDE_API_KEY"]
+    except Exception:
+        api_key = os.getenv('CLAUDE_API_KEY')
+
+    client = anthropic.Anthropic(api_key=api_key)
     )
 
     message = client.messages.create(
