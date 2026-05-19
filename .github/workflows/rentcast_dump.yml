@@ -10,8 +10,6 @@ jobs:
   dump:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout code
@@ -34,5 +32,6 @@ jobs:
           SUPABASE_PASSWORD: ${{ secrets.SUPABASE_PASSWORD }}
           SUPABASE_PORT: ${{ secrets.SUPABASE_PORT }}
           RENTCAST_API_KEY: ${{ secrets.RENTCAST_API_KEY }}
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         run: |
           python scripts/rentcast_dump.py

@@ -10,9 +10,7 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-	
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -33,5 +31,6 @@ jobs:
           SUPABASE_USER: ${{ secrets.SUPABASE_USER }}
           SUPABASE_PASSWORD: ${{ secrets.SUPABASE_PASSWORD }}
           SUPABASE_PORT: ${{ secrets.SUPABASE_PORT }}
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
         run: |
           python scripts/weekly_vault_update.py
