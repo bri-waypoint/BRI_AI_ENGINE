@@ -1,6 +1,9 @@
 # config/database.py
 # Supabase database connection for BRI AI Engine
 # Supports both Shannyn's portfolio AND one-off property searches
+# FIXED: get_nearby_vault_properties now catches all LEASED
+#        status variants (LEASED, LEASED_RECENT, LEASED_HISTORICAL,
+#        LEASED_DATED) so no leased comps are missed in searches
 
 import os
 import math
@@ -206,8 +209,14 @@ def get_nearby_vault_properties(lat, lon, radius_miles=3.0,
                                 limit=100, property_types=None):
     """
     Get properties from BRI Vault within radius.
-    Only returns leased properties from last 15 months.
+    Returns leased properties from last 15 months.
     Always returns active listings regardless of date.
+
+    FIXED: Now catches ALL leased status variants:
+    - LEASED         (set by our fixed mark_inactive_properties)
+    - LEASED_RECENT  (sent directly by BrightData/Zillow)
+    - LEASED_HISTORICAL (sent directly by BrightData/Zillow)
+    - LEASED_DATED   (sent directly by BrightData/Zillow)
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -250,7 +259,7 @@ def get_nearby_vault_properties(lat, lon, radius_miles=3.0,
             AND (home_type IN ({type_placeholders})
                  OR home_type IS NULL)
             AND (
-                (listing_status = 'LEASED'
+                (listing_status LIKE 'LEASED%%'
                  AND last_seen_date >= TO_CHAR(
                      CURRENT_DATE - INTERVAL '15 months',
                      'YYYY-MM-DD'))
@@ -293,7 +302,8 @@ def get_nearby_vault_properties(lat, lon, radius_miles=3.0,
             continue
 
     results.sort(key=lambda p: (
-        0 if p.get('listing_status') == 'LEASED' else 1,
+        0 if str(p.get('listing_status', '')).startswith('LEASED')
+        else 1,
         p.get('distance_miles', 99)
     ))
 
