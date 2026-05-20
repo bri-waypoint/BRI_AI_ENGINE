@@ -1,6 +1,9 @@
 # app/bri_ai_engine.py
 # BRI AI Engine - Core analysis using Claude API
 # Fixed for Streamlit Cloud - reads secrets from st.secrets
+# FIXED: vault leased filter now catches all LEASED status
+#        variants (LEASED, LEASED_RECENT, LEASED_HISTORICAL,
+#        LEASED_DATED) so no leased comps are missed
 
 import os
 import sys
@@ -61,6 +64,23 @@ def filter_to_recent(properties, months=15):
             removed += 1
     return recent, removed
 
+def is_leased_status(listing_status):
+    """
+    Check if a listing status indicates a leased property.
+    Catches all variants BrightData/Zillow may return:
+    - LEASED         (set by our mark_inactive_properties fix)
+    - LEASED_RECENT  (sent directly by BrightData/Zillow)
+    - LEASED_HISTORICAL (sent directly by BrightData/Zillow)
+    - LEASED_DATED   (sent directly by BrightData/Zillow)
+    """
+    status = (listing_status or "").upper()
+    return status.startswith("LEASED")
+
+def is_active_status(listing_status):
+    """Check if a listing status indicates an active property."""
+    status = (listing_status or "").upper()
+    return "ACTIVE" in status
+
 def analyze_property(subject, radius_miles=3.0, property_types=None, use_rentcast=True):
     """
     Main analysis function combining BRI Vault + RentCast data.
@@ -103,8 +123,15 @@ def analyze_property(subject, radius_miles=3.0, property_types=None, use_rentcas
         property_types=vault_types
     )
 
-    vault_leased_raw = [p for p in vault_props if p.get("listing_status") == "LEASED"]
-    vault_active = [p for p in vault_props if "ACTIVE" in str(p.get("listing_status", "")).upper()]
+    # FIXED: use is_leased_status() to catch all LEASED variants
+    vault_leased_raw = [
+        p for p in vault_props
+        if is_leased_status(p.get("listing_status"))
+    ]
+    vault_active = [
+        p for p in vault_props
+        if is_active_status(p.get("listing_status"))
+    ]
     vault_leased, vault_removed = filter_to_recent(vault_leased_raw, months=15)
     vault_leased = sort_by_recency_then_distance(vault_leased)
     print(f"   Vault leased: {len(vault_leased)} recent ({vault_removed} older removed)")
@@ -123,8 +150,14 @@ def analyze_property(subject, radius_miles=3.0, property_types=None, use_rentcas
             limit=150,
             property_types=rc_types
         )
-        rc_leased_raw = [p for p in rc_props if p.get("listing_status") == "Inactive"]
-        rc_active = [p for p in rc_props if p.get("listing_status") == "Active"]
+        rc_leased_raw = [
+            p for p in rc_props
+            if p.get("listing_status") == "Inactive"
+        ]
+        rc_active = [
+            p for p in rc_props
+            if p.get("listing_status") == "Active"
+        ]
         rc_leased, rc_removed = filter_to_recent(rc_leased_raw, months=15)
         rc_leased = sort_by_recency_then_distance(rc_leased)
         print(f"   RentCast leased: {len(rc_leased)} recent ({rc_removed} older removed)")
@@ -141,8 +174,15 @@ def analyze_property(subject, radius_miles=3.0, property_types=None, use_rentcas
             limit=150,
             property_types=vault_types
         )
-        vault_leased_raw = [p for p in vault_props if p.get("listing_status") == "LEASED"]
-        vault_active = [p for p in vault_props if "ACTIVE" in str(p.get("listing_status", "")).upper()]
+        # FIXED: use is_leased_status() here too
+        vault_leased_raw = [
+            p for p in vault_props
+            if is_leased_status(p.get("listing_status"))
+        ]
+        vault_active = [
+            p for p in vault_props
+            if is_active_status(p.get("listing_status"))
+        ]
         vault_leased, _ = filter_to_recent(vault_leased_raw, months=15)
         vault_leased = sort_by_recency_then_distance(vault_leased)
 
@@ -154,8 +194,14 @@ def analyze_property(subject, radius_miles=3.0, property_types=None, use_rentcas
                 limit=150,
                 property_types=rc_types
             )
-            rc_leased_raw = [p for p in rc_props if p.get("listing_status") == "Inactive"]
-            rc_active = [p for p in rc_props if p.get("listing_status") == "Active"]
+            rc_leased_raw = [
+                p for p in rc_props
+                if p.get("listing_status") == "Inactive"
+            ]
+            rc_active = [
+                p for p in rc_props
+                if p.get("listing_status") == "Active"
+            ]
             rc_leased, _ = filter_to_recent(rc_leased_raw, months=15)
             rc_leased = sort_by_recency_then_distance(rc_leased)
 
@@ -186,7 +232,7 @@ def analyze_property(subject, radius_miles=3.0, property_types=None, use_rentcas
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=2500,
+        max_tokens=4000,
         messages=[{"role": "user", "content": prompt}]
     )
     analysis = message.content[0].text
