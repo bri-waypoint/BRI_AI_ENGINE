@@ -5,6 +5,9 @@
 # Data format: Plain array (no "input" wrapper)
 # Fixed: 90-second wait after "ready" before download
 # Updated: May 2026
+# FIXED: mark_inactive_properties now correctly labels
+#        disappearing properties as LEASED and logs
+#        inferred leased events to price_history table
 
 import urllib.request
 import json
@@ -47,8 +50,7 @@ def get_supabase_config():
         'database': os.getenv('SUPABASE_DB', 'postgres'),
         'user': os.getenv('SUPABASE_USER',
                           'postgres.nftbgxdauxirzmogrydl'),
-        'password': os.getenv('SUPABASE_PASSWORD',
-                              '6rsx5LEkaGBfnJsc'),
+        'password': os.getenv('SUPABASE_PASSWORD', ''),
         'port': int(os.getenv('SUPABASE_PORT', '5432')),
         'sslmode': 'require',
         'connect_timeout': 30
@@ -538,22 +540,96 @@ def update_price_history(snapshot_date):
     return inserted, skipped
 
 def mark_inactive_properties(snapshot_date):
-    """Mark properties not seen today as inactive."""
+    """
+    Mark properties not seen in today's scrape as inactive.
+
+    FIXED VERSION - now does three things:
+    1. Finds all properties about to go inactive
+    2. Logs an inferred LEASED event to price_history for each one
+    3. Updates listing_status to LEASED and is_active to 0
+
+    This ensures the comp search can find these properties
+    as leased comparables in future searches.
+    """
     log("[STEP 6] Marking unseen properties as inactive...")
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+
+        # First get the properties that are about to go inactive
+        # so we can log them to price_history before updating
+        cursor.execute("""
+            SELECT zpid, current_price
+            FROM properties
+            WHERE last_seen_date != %s
+            AND is_active = 1
+        """, (snapshot_date,))
+        going_inactive = cursor.fetchall()
+        log(f"   Found {len(going_inactive):,} properties "
+            f"to mark inactive...")
+
+        # Log an inferred LEASED event to price_history
+        # for each property going inactive
+        leased_logged = 0
+        leased_skipped = 0
+        for zpid, last_price in going_inactive:
+            try:
+                # Check if we already logged this transition
+                # to avoid duplicates on re-runs
+                cursor.execute("""
+                    SELECT id FROM price_history
+                    WHERE zpid = %s::text
+                    AND date = %s
+                    AND event = 'Listed as Leased'
+                """, (str(zpid), snapshot_date))
+
+                if cursor.fetchone():
+                    leased_skipped += 1
+                    continue
+
+                # Insert the inferred leased event
+                # source = BRI-Inferred so we know it's approximate
+                cursor.execute("""
+                    INSERT INTO price_history (
+                        zpid, date, event, price,
+                        price_per_squarefoot,
+                        price_change_rate, source,
+                        posting_is_rental
+                    ) VALUES (
+                        %s, %s, 'Listed as Leased', %s,
+                        NULL, NULL, 'BRI-Inferred', 1
+                    )
+                """, (str(zpid), snapshot_date, last_price))
+                leased_logged += 1
+
+            except Exception as e:
+                log(f"   Price history error {zpid}: "
+                    f"{str(e)[:60]}")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                continue
+
+        log(f"   Inferred leased events: "
+            f"{leased_logged:,} logged | "
+            f"{leased_skipped:,} already existed")
+
+        # Now update properties - set LEASED status and is_active=0
         cursor.execute("""
             UPDATE properties
-            SET is_active = 0
+            SET is_active = 0,
+                listing_status = 'LEASED'
             WHERE last_seen_date != %s
             AND is_active = 1
         """, (snapshot_date,))
         marked = cursor.rowcount
+
         conn.commit()
         conn.close()
-        log(f"   Marked {marked:,} properties as inactive")
+        log(f"   Marked {marked:,} properties as LEASED/inactive")
         return marked
+
     except Exception as e:
         log(f"   Error: {str(e)}")
         return 0
@@ -565,7 +641,7 @@ def get_vault_stats():
         cursor = conn.cursor()
         cursor.execute("""
             SELECT
-                COUNT(CASE WHEN listing_status LIKE '%%LEASED%%'
+                COUNT(CASE WHEN listing_status = 'LEASED'
                       THEN 1 END) as leased,
                 COUNT(CASE WHEN listing_status LIKE '%%ACTIVE%%'
                       THEN 1 END) as active,
@@ -647,7 +723,7 @@ def main():
     # Step 5: Price history
     ph_inserted, ph_skipped = update_price_history(snapshot_date)
 
-    # Step 6: Mark inactive
+    # Step 6: Mark inactive and log leased events
     marked = mark_inactive_properties(snapshot_date)
 
     # Step 7: Stats
@@ -663,7 +739,7 @@ def main():
     log(f"New: {new_count:,} | Updated: {updated_count:,} | "
         f"Errors: {error_count}")
     log(f"Price history: {ph_inserted:,} new")
-    log(f"Marked inactive: {marked:,}")
+    log(f"Marked inactive/leased: {marked:,}")
     log(f"Vault - Leased: {stats['leased']:,} | "
         f"Active: {stats['active']:,}")
     log("=" * 60)
