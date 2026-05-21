@@ -22,8 +22,8 @@ from datetime import datetime
 # CONFIGURATION
 # ============================================================
 
-API_TOKEN = "83a4636f-05cb-453d-8991-0f560d8ff9ad"
-DATASET_ID = "gd_lfqkr8wm13ixtbd8f5"
+API_TOKEN = "YOUR_BRIGHTDATA_API_TOKEN"
+DATASET_ID = "YOUR_DATASET_ID"
 
 ZILLOW_URLS = [
     {"url": "https://www.zillow.com/boise-id-83702/rentals/?searchQueryState=%7B%22isMapVisible%22%3Atrue%2C%22mapBounds%22%3A%7B%22north%22%3A43.69260429977995%2C%22south%22%3A43.57308340022005%2C%22east%22%3A-116.14426818896483%2C%22west%22%3A-116.28695581103514%7D%2C%22filterState%22%3A%7B%22fr%22%3A%7B%22value%22%3Atrue%7D%2C%22fsba%22%3A%7B%22value%22%3Afalse%7D%2C%22fsbo%22%3A%7B%22value%22%3Afalse%7D%2C%22nc%22%3A%7B%22value%22%3Afalse%7D%2C%22cmsn%22%3A%7B%22value%22%3Afalse%7D%2C%22auc%22%3A%7B%22value%22%3Afalse%7D%2C%22fore%22%3A%7B%22value%22%3Afalse%7D%7D%2C%22isListVisible%22%3Atrue%2C%22mapZoom%22%3A12%2C%22usersSearchTerm%22%3A%2283702%22%2C%22regionSelection%22%3A%5B%7B%22regionId%22%3A94282%2C%22regionType%22%3A7%7D%5D%7D"},
@@ -61,7 +61,7 @@ SEND_SMS = True
 YOUR_PHONE_NUMBER = "2088670377"
 YOUR_CARRIER = "verizon"
 GMAIL_ADDRESS = "markflory1@gmail.com"
-GMAIL_APP_PASSWORD = "wajg aiag wycz xtoo"
+GMAIL_APP_PASSWORD = os.getenv('GMAIL_APP_PASSWORD', '')
 SMS_GATEWAYS = {
     'verizon': 'vtext.com',
     'att': 'txt.att.net',
@@ -335,10 +335,30 @@ def import_to_vault(records, snapshot_date):
                 )
                 exists = cursor.fetchone()
 
-                address = str(record.get('address', '') or '')
-                city = str(record.get('city', '') or '')
-                state = str(record.get('state', 'ID') or 'ID')
-                zipcode = str(record.get('zipcode', '') or '')
+                # Handle address whether it comes as a plain
+                # string or as a dict from BrightData
+                raw_address = record.get('address', '') or ''
+                if isinstance(raw_address, dict):
+                    address = str(
+                        raw_address.get('streetAddress', '') or ''
+                    )
+                    city = str(
+                        raw_address.get('city', '') or
+                        record.get('city', '') or ''
+                    )
+                    state = str(
+                        raw_address.get('state', 'ID') or
+                        record.get('state', 'ID') or 'ID'
+                    )
+                    zipcode = str(
+                        raw_address.get('zipcode', '') or
+                        record.get('zipcode', '') or ''
+                    )
+                else:
+                    address = str(raw_address)
+                    city = str(record.get('city', '') or '')
+                    state = str(record.get('state', 'ID') or 'ID')
+                    zipcode = str(record.get('zipcode', '') or '')
                 bedrooms = record.get('bedrooms')
                 bathrooms = record.get('bathrooms')
                 living_area = record.get('livingArea')
