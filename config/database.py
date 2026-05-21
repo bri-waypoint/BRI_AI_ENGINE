@@ -4,9 +4,12 @@
 # FIXED: get_nearby_vault_properties now catches all LEASED
 #        status variants (LEASED, LEASED_RECENT, LEASED_HISTORICAL,
 #        LEASED_DATED) so no leased comps are missed in searches
+# ADDED: save/load property notes per subject property
+# ADDED: save/load analysis reports per subject property
 
 import os
 import math
+import json
 import requests
 import psycopg2
 from dotenv import load_dotenv
@@ -107,7 +110,6 @@ def geocode_address(address, city, state, zipcode=''):
             if results:
                 lat = float(results[0]['lat'])
                 lon = float(results[0]['lon'])
-                # Validate Idaho coordinates
                 if 42.0 <= lat <= 49.0 and -117.5 <= lon <= -111.0:
                     return lat, lon
         return None, None
@@ -125,7 +127,6 @@ def save_one_off_search(address, city, state, zipcode,
     Auto-geocodes if lat/lon not provided.
     Returns the saved record with ID and coordinates.
     """
-    # Auto-geocode if no coordinates provided
     if not latitude or not longitude:
         print("Geocoding address...")
         latitude, longitude = geocode_address(
@@ -204,6 +205,145 @@ def get_recent_one_off_searches(limit=20):
 
     conn.close()
     return results
+
+# ============================================================
+# PROPERTY NOTES - Save and load per subject property
+# ============================================================
+
+def save_property_notes(property_id, notes):
+    """
+    Save Shannyn's notes for a specific subject property.
+    Updates the saved_notes column in subject_properties.
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE subject_properties
+            SET saved_notes = %s,
+                updated_at = NOW()
+            WHERE id = %s
+        """, (notes, property_id))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error saving notes: {str(e)}")
+        return False
+
+def get_property_notes(property_id):
+    """
+    Load saved notes for a specific subject property.
+    Returns the saved notes string or empty string if none.
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT saved_notes
+            FROM subject_properties
+            WHERE id = %s
+        """, (property_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row[0]:
+            return row[0]
+        return ""
+    except Exception as e:
+        print(f"Error loading notes: {str(e)}")
+        return ""
+
+# ============================================================
+# ANALYSIS REPORTS - Save and load per subject property
+# ============================================================
+
+def save_analysis_report(property_id, property_address,
+                         property_city, report_text,
+                         selected_comps, vault_leased_count,
+                         rentcast_leased_count, total_leased_count,
+                         total_active_count, radius_used,
+                         property_notes):
+    """
+    Save a completed analysis report to the database.
+    Called automatically after every successful analysis.
+    Returns the new report ID or None on failure.
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO analysis_reports (
+                property_id, property_address, property_city,
+                report_text, comps_used,
+                vault_leased_count, rentcast_leased_count,
+                total_leased_count, total_active_count,
+                radius_used, property_notes
+            ) VALUES (
+                %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s
+            )
+            RETURNING id
+        """, (
+            property_id,
+            property_address,
+            property_city,
+            report_text,
+            json.dumps(selected_comps),
+            vault_leased_count,
+            rentcast_leased_count,
+            total_leased_count,
+            total_active_count,
+            radius_used,
+            property_notes
+        ))
+        report_id = cursor.fetchone()[0]
+        conn.commit()
+        conn.close()
+        return report_id
+    except Exception as e:
+        print(f"Error saving report: {str(e)}")
+        return None
+
+def get_reports_for_property(property_id, limit=10):
+    """
+    Load previous analysis reports for a subject property.
+    Returns list of reports newest first.
+    """
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                id,
+                report_text,
+                vault_leased_count,
+                rentcast_leased_count,
+                total_leased_count,
+                total_active_count,
+                radius_used,
+                property_notes,
+                TO_CHAR(created_at,
+                    'Month DD, YYYY HH12:MI AM') as created_at
+            FROM analysis_reports
+            WHERE property_id = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+        """, (property_id, limit))
+        columns = [desc[0] for desc in cursor.description]
+        results = []
+        for row in cursor.fetchall():
+            report = {col: clean_value(val)
+                      for col, val in zip(columns, row)}
+            results.append(report)
+        conn.close()
+        return results
+    except Exception as e:
+        print(f"Error loading reports: {str(e)}")
+        return []
+
+# ============================================================
+# NEARBY PROPERTY SEARCHES
+# ============================================================
 
 def get_nearby_vault_properties(lat, lon, radius_miles=3.0,
                                 limit=100, property_types=None):
@@ -413,7 +553,7 @@ def get_subject_properties():
     cursor.execute("""
         SELECT id, address, city, state, bedrooms, bathrooms,
                living_area, latitude, longitude,
-               current_rent, notes
+               current_rent, notes, saved_notes
         FROM subject_properties
         WHERE latitude IS NOT NULL
           AND longitude IS NOT NULL
@@ -461,6 +601,9 @@ def get_database_stats():
     cursor.execute("SELECT COUNT(*) FROM one_off_searches")
     one_off = cursor.fetchone()
 
+    cursor.execute("SELECT COUNT(*) FROM analysis_reports")
+    reports = cursor.fetchone()
+
     conn.close()
 
     return {
@@ -471,5 +614,6 @@ def get_database_stats():
         'rentcast_leased': rc[1],
         'rentcast_active': rc[2],
         'rentcast_last_dump': rc[3],
-        'one_off_total': one_off[0]
+        'one_off_total': one_off[0],
+        'reports_total': reports[0]
     }
