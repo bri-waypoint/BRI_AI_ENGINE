@@ -1,12 +1,10 @@
 # app/bri_ai_app.py
 # BRI AI Engine - Streamlit Interface
-# UPDATED: Two-step comp selection workflow for Shannyn portfolio
-#          Step 1: Find Comps - review and select top 15 leased + active
-#          Step 2: Generate Report - Claude analyzes selected comps only
-# FIXED: Comments saved per property, no bleed-over between properties
-# ADDED: Reports saved automatically to database after each analysis
-# ADDED: Previous reports tab per property
-# One-off searches keep original single-step workflow
+# UPDATED: Four-round appraisal comp search workflow
+#          Zillow URL clickable in comp selection tables
+#          Confidence score shows which round search stopped at
+#          Distance-first sort matching appraisal methodology
+#          Notes saved per property, reports saved to database
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +13,6 @@ import sys
 import urllib.parse
 from datetime import datetime
 
-# Fix import paths for Streamlit Cloud
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
 sys.path.insert(0, root_dir)
@@ -66,6 +63,7 @@ def make_google_maps_url(address, city, state):
         full = f"{address}, {city}, {state}"
         encoded = urllib.parse.quote(full)
         return f"https://www.google.com/maps/search/?api=1&query={encoded}"
+        return None
     except Exception:
         return None
 
@@ -82,7 +80,7 @@ def format_sqft(val):
         return "N/A"
 
 def show_property_table(props, price_col="Rent/Mo"):
-    """Display a read-only property table with links."""
+    """Display a read-only property table."""
     if not props:
         st.info("No properties in this category.")
         return
@@ -111,9 +109,13 @@ def show_property_table(props, price_col="Rent/Mo"):
         maps = make_google_maps_url(addr, city, "ID")
         parts = []
         if zillow:
-            parts.append(f'<a href="{zillow}" target="_blank">🏠 Zillow</a>')
+            parts.append(
+                f'<a href="{zillow}" target="_blank">🏠 Zillow</a>'
+            )
         if maps:
-            parts.append(f'<a href="{maps}" target="_blank">📍 Map</a>')
+            parts.append(
+                f'<a href="{maps}" target="_blank">📍 Map</a>'
+            )
         links.append(" | ".join(parts) if parts else "N/A")
     display_df["Links"] = links
 
@@ -124,48 +126,59 @@ def show_property_table(props, price_col="Rent/Mo"):
     )
     st.caption(f"Showing {len(props)} properties")
 
-def build_selectable_comp_table(props, table_key, price_label="Rent/Mo"):
+def build_selectable_comp_table(props, table_key,
+                                 price_label="Rent/Mo"):
     """
-    Display a sortable, selectable comp table.
+    Display a sortable selectable comp table with Zillow links.
     Returns list of selected property dicts.
-    Shannyn checks boxes next to the comps she wants to use.
     """
     if not props:
         return []
 
-    # Build display dataframe
     rows = []
     for i, p in enumerate(props):
+        addr = str(p.get("address", "") or "")
+        city = str(p.get("city", "") or "")
+        zillow_url = make_zillow_url(addr, city, "ID")
+        zillow_link = (
+            f'<a href="{zillow_url}" target="_blank">🏠</a>'
+            if zillow_url else ""
+        )
         rows.append({
             "Select": False,
-            "Address": str(p.get("address", "") or ""),
-            "City": str(p.get("city", "") or ""),
+            "Zillow": zillow_link,
+            "Address": addr,
+            "City": city,
             "Beds": p.get("bedrooms", ""),
             "Baths": p.get("bathrooms", ""),
             "SqFt": format_sqft(p.get("living_area")),
             price_label: format_price(p.get("current_price")),
-            "Date": str(p.get("last_seen_date", "") or "")[:10],
+            "Date": str(
+                p.get("last_seen_date", "") or ""
+            )[:10],
             "Miles": f"{float(p.get('distance_miles') or 0):.2f}",
+            "Type": str(p.get("home_type", "") or ""),
             "Source": str(p.get("data_source", "") or ""),
             "_index": i
         })
 
     df = pd.DataFrame(rows)
 
-    # Sort controls
     sort_col = st.selectbox(
         "Sort by:",
-        options=["Date", "Miles", "SqFt", "Beds", price_label],
+        options=["Miles", "Date", "SqFt", "Beds", price_label],
         key=f"sort_{table_key}"
-    ) if len(props) > 1 else "Date"
+    ) if len(props) > 1 else "Miles"
 
     if sort_col == "Miles":
         df["_sort"] = pd.to_numeric(df["Miles"], errors="coerce")
         df = df.sort_values("_sort")
+    elif sort_col == "Date":
+        df = df.sort_values("Date", ascending=False)
     elif sort_col == "SqFt":
-        df["_sort"] = df["SqFt"].str.replace(",", "").apply(
-            pd.to_numeric, errors="coerce"
-        )
+        df["_sort"] = df["SqFt"].str.replace(
+            ",", ""
+        ).apply(pd.to_numeric, errors="coerce")
         df = df.sort_values("_sort", ascending=False)
     elif sort_col == "Beds":
         df["_sort"] = pd.to_numeric(df["Beds"], errors="coerce")
@@ -175,14 +188,15 @@ def build_selectable_comp_table(props, table_key, price_label="Rent/Mo"):
             "[$,]", "", regex=True
         ).apply(pd.to_numeric, errors="coerce")
         df = df.sort_values("_sort", ascending=False)
-    else:
-        df = df.sort_values("Date", ascending=False)
 
     df = df.drop(columns=["_sort"], errors="ignore")
 
-    # Show editable table with checkboxes
+    # Show Zillow links as HTML, rest as data_editor
+    display_cols = [c for c in df.columns if c != "_index"]
+    non_link_cols = [c for c in display_cols if c != "Zillow"]
+
     edited = st.data_editor(
-        df.drop(columns=["_index"]),
+        df[non_link_cols],
         key=f"editor_{table_key}",
         use_container_width=True,
         hide_index=True,
@@ -195,14 +209,45 @@ def build_selectable_comp_table(props, table_key, price_label="Rent/Mo"):
         }
     )
 
-    # Return selected properties
+    # Show Zillow links separately below table
+    zillow_data = df[["Address", "Zillow"]].copy()
+    st.write(
+        zillow_data.to_html(
+            escape=False, index=False, classes="dataframe"
+        ),
+        unsafe_allow_html=True
+    )
+
     selected = []
     for i, row in edited.iterrows():
         if row.get("Select"):
             orig_index = df.iloc[i]["_index"]
-            selected.append(props[orig_index])
+            selected.append(props[int(orig_index)])
 
     return selected
+
+def confidence_display(confidence, round_stopped, radius_used):
+    """Show confidence badge with search details."""
+    colors = {
+        'HIGH': '🟢',
+        'GOOD': '🔵',
+        'MEDIUM': '🟡',
+        'LOW': '🔴'
+    }
+    icon = colors.get(confidence, '⚪')
+    messages = {
+        'HIGH': f'HIGH confidence — tight subdivision data '
+                f'(Round {round_stopped}, {radius_used} mi radius)',
+        'GOOD': f'GOOD confidence — immediate area data '
+                f'(Round {round_stopped}, {radius_used} mi radius)',
+        'MEDIUM': f'MEDIUM confidence — wider neighborhood '
+                  f'(Round {round_stopped}, {radius_used} mi radius)',
+        'LOW': f'LOW confidence — limited local data, '
+               f'wider search required '
+               f'(Round {round_stopped}, {radius_used} mi radius)'
+    }
+    msg = messages.get(confidence, f'Round {round_stopped}')
+    return f"{icon} {msg}"
 
 # ============================================================
 # LOAD DATA
@@ -224,20 +269,26 @@ subjects = load_subjects()
 # ============================================================
 
 st.markdown("# BRI AI Rental Analysis Engine")
-st.markdown("*Powered by Claude AI - BRI Vault - RentCast Market Data*")
+st.markdown(
+    "*Powered by Claude AI — BRI Vault — RentCast Market Data*"
+)
 st.markdown("---")
 
 col1, col2, col3, col4, col5 = st.columns(5)
 with col1:
-    st.metric("Vault Properties", f"{stats.get('vault_total', 0):,}")
+    st.metric("Vault Properties",
+              f"{stats.get('vault_total', 0):,}")
 with col2:
-    st.metric("Vault Leased", f"{stats.get('vault_leased', 0):,}")
+    st.metric("Vault Leased",
+              f"{stats.get('vault_leased', 0):,}")
 with col3:
-    st.metric("RentCast Leased", f"{stats.get('rentcast_leased', 0):,}")
+    st.metric("RentCast Leased",
+              f"{stats.get('rentcast_leased', 0):,}")
 with col4:
     st.metric("Shannyn Properties", f"{len(subjects):,}")
 with col5:
-    st.metric("Saved Reports", f"{stats.get('reports_total', 0):,}")
+    st.metric("Saved Reports",
+              f"{stats.get('reports_total', 0):,}")
 
 st.markdown("---")
 
@@ -246,49 +297,26 @@ st.markdown("---")
 # ============================================================
 
 with st.sidebar:
-    st.markdown("## Search Parameters")
-    radius = st.slider(
-        "Search Radius (miles)",
-        min_value=0.5, max_value=5.0,
-        value=3.0, step=0.5
-    )
-    type_options = {
-        "Single Family + Townhomes": [
-            "SINGLE_FAMILY", "TOWNHOUSE",
-            "Single Family", "Townhouse"
-        ],
-        "Single Family Only": [
-            "SINGLE_FAMILY", "Single Family"
-        ],
-        "Single Family + Condos": [
-            "SINGLE_FAMILY", "CONDO",
-            "Single Family", "Condo"
-        ],
-        "All Residential (no apartments)": [
-            "SINGLE_FAMILY", "TOWNHOUSE", "CONDO",
-            "Single Family", "Townhouse", "Condo"
-        ],
-        "Include Apartments": [
-            "SINGLE_FAMILY", "TOWNHOUSE", "CONDO", "APARTMENT",
-            "Single Family", "Townhouse", "Condo",
-            "Apartment", "Multi-Family"
-        ],
-        "Condos Only": ["CONDO", "Condo"],
-        "Townhomes Only": ["TOWNHOUSE", "Townhouse"],
-    }
-    selected_type = st.selectbox(
-        "Property Types",
-        options=list(type_options.keys()),
-        index=0
-    )
-    property_types = type_options[selected_type]
+    st.markdown("## Search Options")
     use_rentcast = st.checkbox("Include RentCast Data", value=True)
     if use_rentcast:
         st.success(
-            f"{stats.get('rentcast_leased', 0):,} leased comps available"
+            f"{stats.get('rentcast_leased', 0):,} "
+            f"leased comps available"
         )
     else:
-        st.warning("RentCast disabled")
+        st.warning("RentCast disabled — Vault only")
+
+    st.markdown("---")
+    st.markdown("### How Search Works")
+    st.markdown(
+        "BRI uses a four-round appraisal method:\n\n"
+        "🟢 **Round 1** — 1 mile, 15 months\n\n"
+        "🔵 **Round 2** — 2 miles, 24 months\n\n"
+        "🟡 **Round 3** — 3 miles, 24 months\n\n"
+        "🔴 **Round 4** — 5 miles, 24 months\n\n"
+        "Search stops when 25+ similar comps found."
+    )
 
 # ============================================================
 # MAIN TABS
@@ -300,7 +328,7 @@ main_tab1, main_tab2 = st.tabs([
 ])
 
 # ============================================================
-# TAB 1: SHANNYN PORTFOLIO - TWO STEP WORKFLOW
+# TAB 1: SHANNYN PORTFOLIO
 # ============================================================
 
 with main_tab1:
@@ -309,12 +337,12 @@ with main_tab1:
     if not subjects:
         st.error("No subject properties found with coordinates.")
     else:
-        # Property selector
         property_options = {}
         for s in subjects:
             beds = s.get("bedrooms", "?")
             baths = s.get("bathrooms", "?")
-            sqft = int(s.get("living_area", 0)) if s.get("living_area") else 0
+            sqft = int(s.get("living_area", 0)) if s.get(
+                "living_area") else 0
             label = (f"{s['address']}, {s['city']} | "
                      f"{beds}bd/{baths}ba | {sqft:,} sqft")
             property_options[label] = s
@@ -328,25 +356,28 @@ with main_tab1:
         subject = property_options[selected_label]
         property_id = subject.get("id")
 
-        # Detect property change and reset workflow state
+        # Reset workflow when property changes
         if st.session_state.get("last_property_id") != property_id:
             st.session_state["last_property_id"] = property_id
             st.session_state["comps_ready"] = False
             st.session_state["comp_result"] = None
             st.session_state["report_ready"] = False
             st.session_state["report_result"] = None
-            # Load saved notes for this property
             saved = get_property_notes(property_id)
             st.session_state["loaded_notes"] = saved
 
         # Property details
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Bedrooms", subject.get("bedrooms", "N/A"))
+            st.metric("Bedrooms",
+                      subject.get("bedrooms", "N/A"))
         with col2:
-            st.metric("Bathrooms", subject.get("bathrooms", "N/A"))
+            st.metric("Bathrooms",
+                      subject.get("bathrooms", "N/A"))
         with col3:
-            sqft_val = int(subject.get("living_area", 0)) if subject.get("living_area") else 0
+            sqft_val = int(subject.get(
+                "living_area", 0)) if subject.get(
+                "living_area") else 0
             st.metric("Square Feet", f"{sqft_val:,}")
         with col4:
             cr = subject.get("current_rent")
@@ -368,9 +399,11 @@ with main_tab1:
                 st.markdown(f"[View on Zillow]({sub_zillow})")
         with lc2:
             if sub_maps:
-                st.markdown(f"[View on Google Maps]({sub_maps})")
+                st.markdown(
+                    f"[View on Google Maps]({sub_maps})"
+                )
 
-        # Notes - loads saved notes automatically per property
+        # Notes
         notes = st.text_area(
             "Property Notes (saved per property)",
             value=st.session_state.get("loaded_notes", ""),
@@ -379,7 +412,6 @@ with main_tab1:
             key=f"notes_{property_id}"
         )
 
-        # Save notes button
         if st.button("💾 Save Notes", key="save_notes_btn"):
             if save_property_notes(property_id, notes):
                 st.session_state["loaded_notes"] = notes
@@ -394,12 +426,13 @@ with main_tab1:
         # --------------------------------------------------------
 
         st.markdown(
-            f"### Step 1 — Find Comps for "
-            f"{subject['address']}, {subject['city']}"
+            f"### Step 1 — Find Comps"
         )
         st.info(
-            f"Radius: {radius} mi | Types: {selected_type} | "
-            f"RentCast: {'On' if use_rentcast else 'Off'}"
+            f"**{subject['address']}, {subject['city']}** — "
+            f"BRI will search using the four-round appraisal "
+            f"method, expanding radius until 25+ similar "
+            f"properties are found."
         )
 
         if st.button(
@@ -409,13 +442,11 @@ with main_tab1:
             key="find_comps_btn"
         ):
             with st.spinner(
-                "Searching BRI Vault + RentCast... (10-20 seconds)"
+                "Running appraisal comp search... (15-30 seconds)"
             ):
                 try:
                     comp_result = get_comparable_properties(
                         subject=subject,
-                        radius_miles=radius,
-                        property_types=property_types,
                         use_rentcast=use_rentcast
                     )
                     st.session_state["comp_result"] = comp_result
@@ -434,36 +465,31 @@ with main_tab1:
             comp_result = st.session_state["comp_result"]
             leased_comps = comp_result.get("leased", [])
             active_comps = comp_result.get("active", [])
-
-            if comp_result.get("radius_expanded"):
-                st.warning(
-                    "Search radius was automatically expanded to "
-                    "5 miles due to limited nearby comps."
-                )
-
-            total = comp_result.get("total_leased", 0)
-            if total >= 10:
-                st.success(
-                    f"Found {total} recent leased comps — "
-                    f"HIGH CONFIDENCE data available"
-                )
-            elif total >= 5:
-                st.warning(
-                    f"Found {total} recent leased comps — "
-                    f"MEDIUM CONFIDENCE data available"
-                )
-            else:
-                st.error(
-                    f"Only {total} recent leased comps found — "
-                    f"LOW CONFIDENCE - consider expanding radius"
-                )
+            confidence = comp_result.get("confidence", "LOW")
+            round_stopped = comp_result.get("round_stopped", 4)
+            radius_used = comp_result.get("radius_used", 5.0)
 
             st.markdown("---")
+
+            # Confidence display
+            conf_msg = confidence_display(
+                confidence, round_stopped, radius_used
+            )
+            if confidence == 'HIGH':
+                st.success(conf_msg)
+            elif confidence == 'GOOD':
+                st.info(conf_msg)
+            elif confidence == 'MEDIUM':
+                st.warning(conf_msg)
+            else:
+                st.error(conf_msg)
+
             st.markdown("### Step 2 — Select Your Comps")
             st.markdown(
-                "Review the top comps below. "
-                "**Select at least 3 leased and 3 active** "
-                "then click Generate Report."
+                "Review the comps below. "
+                "**Select at least 3 leased and 1 active** "
+                "then click Generate Report. "
+                "Click 🏠 to view any property on Zillow."
             )
 
             comp_tab1, comp_tab2 = st.tabs([
@@ -474,14 +500,14 @@ with main_tab1:
             with comp_tab1:
                 if not leased_comps:
                     st.error(
-                        "No leased comps found. Try expanding "
-                        "your search radius."
+                        "No leased comps found. "
+                        "Try disabling property type filters."
                     )
                     selected_leased = []
                 else:
                     st.markdown(
-                        "Check the boxes next to the leased "
-                        "properties you want to include:"
+                        "Check the boxes for leased properties "
+                        "to include in analysis:"
                     )
                     selected_leased = build_selectable_comp_table(
                         leased_comps,
@@ -499,13 +525,14 @@ with main_tab1:
             with comp_tab2:
                 if not active_comps:
                     st.warning(
-                        "No active listings found in this area."
+                        "No active listings found. "
+                        "Analysis will rely on leased comps only."
                     )
                     selected_active = []
                 else:
                     st.markdown(
-                        "Check the boxes next to the active "
-                        "listings you want to include:"
+                        "Check the boxes for active listings "
+                        "to include in analysis:"
                     )
                     selected_active = build_selectable_comp_table(
                         active_comps,
@@ -518,23 +545,24 @@ with main_tab1:
                             f"listing(s) selected"
                         )
                     else:
-                        st.warning("No active listings selected yet")
+                        st.warning(
+                            "No active listings selected yet"
+                        )
 
             st.markdown("---")
 
-            # Validate minimum selections
+            # Validate minimums
             leased_ok = len(selected_leased) >= 3
-            active_ok = len(selected_active) >= 3
+            active_ok = len(selected_active) >= 1
 
             if not leased_ok:
                 st.warning(
                     f"Please select at least 3 leased comps "
                     f"(currently {len(selected_leased)} selected)"
                 )
-            if not active_ok:
+            if not active_ok and active_comps:
                 st.warning(
-                    f"Please select at least 3 active listings "
-                    f"(currently {len(selected_active)} selected)"
+                    "Please select at least 1 active listing"
                 )
 
             # --------------------------------------------------------
@@ -543,21 +571,23 @@ with main_tab1:
 
             st.markdown("### Step 3 — Generate Market Report")
 
-            generate_disabled = not (leased_ok and active_ok)
+            can_generate = leased_ok and (
+                active_ok or not active_comps
+            )
 
             if st.button(
                 "📊 Generate Market Report",
                 type="primary",
                 use_container_width=True,
                 key="generate_report_btn",
-                disabled=generate_disabled
+                disabled=not can_generate
             ):
-                # Update subject with current notes
                 subject_with_notes = dict(subject)
                 subject_with_notes["notes"] = notes
 
                 with st.spinner(
-                    "Analyzing with Claude AI... (30-60 seconds)"
+                    "Analyzing with Claude AI... "
+                    "(30-60 seconds)"
                 ):
                     try:
                         result = generate_report(
@@ -565,17 +595,20 @@ with main_tab1:
                             selected_leased=selected_leased,
                             selected_active=selected_active
                         )
-                        result["radius_used"] = comp_result.get(
-                            "radius_used", radius
-                        )
+                        result["radius_used"] = radius_used
+                        result["confidence"] = confidence
+                        result["round_stopped"] = round_stopped
                         st.session_state["report_result"] = result
                         st.session_state["report_ready"] = True
 
-                        # Save report to database automatically
-                        all_selected = selected_leased + selected_active
+                        # Save report
+                        all_selected = (
+                            selected_leased + selected_active
+                        )
                         report_id = save_analysis_report(
                             property_id=property_id,
-                            property_address=subject.get("address", ""),
+                            property_address=subject.get(
+                                "address", ""),
                             property_city=subject.get("city", ""),
                             report_text=result["analysis"],
                             selected_comps=all_selected,
@@ -587,7 +620,7 @@ with main_tab1:
                                 "total_leased", 0),
                             total_active_count=result.get(
                                 "total_active", 0),
-                            radius_used=result.get("radius_used", radius),
+                            radius_used=radius_used,
                             property_notes=notes
                         )
                         if report_id:
@@ -597,9 +630,6 @@ with main_tab1:
                             )
                         else:
                             st.success("Report generated!")
-                            st.warning(
-                                "Note: Could not save report to database."
-                            )
 
                     except Exception as e:
                         st.error(f"Analysis failed: {str(e)}")
@@ -621,21 +651,21 @@ with main_tab1:
                               len(result.get("vault_leased", [])))
                 with col2:
                     st.metric("RentCast Leased",
-                              len(result.get("rentcast_leased", [])))
+                              len(result.get(
+                                  "rentcast_leased", [])))
                 with col3:
                     st.metric("Total Leased",
                               result.get("total_leased", 0))
                 with col4:
-                    st.metric("Active Listings",
+                    st.metric("Active Used",
                               result.get("total_active", 0))
                 with col5:
-                    st.metric("Radius",
-                              f"{result.get('radius_used', 3)} mi")
+                    st.metric("Confidence",
+                              result.get("confidence", "N/A"))
 
                 st.markdown("---")
                 st.markdown(result["analysis"])
 
-                # Download button
                 addr = subject.get("address", "property")
                 export_text = (
                     f"BRI RENTAL ANALYSIS REPORT\n"
@@ -645,6 +675,7 @@ with main_tab1:
                     f"{subject.get('city', '')}\n"
                     f"Search Radius: "
                     f"{result.get('radius_used')} miles\n"
+                    f"Confidence: {result.get('confidence')}\n"
                     f"Notes: {notes}\n\n"
                     f"{'='*60}\n\n"
                     f"{result['analysis']}\n\n"
@@ -662,31 +693,36 @@ with main_tab1:
                 st.download_button(
                     label="⬇️ Download Report",
                     data=export_text,
-                    file_name=f"BRI_{addr.replace(' ', '_')}_"
-                              f"{datetime.now().strftime('%Y%m%d')}.txt",
+                    file_name=(
+                        f"BRI_{addr.replace(' ', '_')}_"
+                        f"{datetime.now().strftime('%Y%m%d')}.txt"
+                    ),
                     mime="text/plain",
                     use_container_width=True,
                 )
 
         # --------------------------------------------------------
-        # PREVIOUS REPORTS TAB
+        # PREVIOUS REPORTS
         # --------------------------------------------------------
 
         if property_id:
             st.markdown("---")
             with st.expander(
-                "📁 Previous Reports for This Property", expanded=False
+                "📁 Previous Reports for This Property",
+                expanded=False
             ):
                 prev_reports = get_reports_for_property(
                     property_id, limit=10
                 )
                 if not prev_reports:
                     st.info(
-                        "No previous reports saved for this property yet."
+                        "No previous reports saved for "
+                        "this property yet."
                     )
                 else:
                     st.markdown(
-                        f"**{len(prev_reports)} saved report(s) found**"
+                        f"**{len(prev_reports)} "
+                        f"saved report(s) found**"
                     )
                     report_options = {
                         f"Report from {r['created_at']} — "
@@ -699,18 +735,26 @@ with main_tab1:
                         key="prev_report_selector"
                     )
                     if selected_report_label:
-                        prev = report_options[selected_report_label]
+                        prev = report_options[
+                            selected_report_label
+                        ]
                         st.markdown("---")
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric("Leased Comps Used",
-                                      prev.get("total_leased_count", 0))
+                            st.metric(
+                                "Leased Comps Used",
+                                prev.get("total_leased_count", 0)
+                            )
                         with col2:
-                            st.metric("Active Comps Used",
-                                      prev.get("total_active_count", 0))
+                            st.metric(
+                                "Active Comps Used",
+                                prev.get("total_active_count", 0)
+                            )
                         with col3:
-                            st.metric("Radius Used",
-                                      f"{prev.get('radius_used', 0)} mi")
+                            st.metric(
+                                "Radius Used",
+                                f"{prev.get('radius_used', 0)} mi"
+                            )
                         if prev.get("property_notes"):
                             st.info(
                                 f"Notes at time of report: "
@@ -718,7 +762,6 @@ with main_tab1:
                             )
                         st.markdown(prev["report_text"])
 
-                        # Download previous report
                         dl_text = (
                             f"BRI RENTAL ANALYSIS REPORT\n"
                             f"Generated: {prev['created_at']}\n"
@@ -730,20 +773,24 @@ with main_tab1:
                         st.download_button(
                             label="⬇️ Download This Report",
                             data=dl_text,
-                            file_name=f"BRI_{subject['address'].replace(' ', '_')}"
-                                      f"_prev_report.txt",
+                            file_name=(
+                                f"BRI_"
+                                f"{subject['address'].replace(' ', '_')}"
+                                f"_prev_report.txt"
+                            ),
                             mime="text/plain",
                             key="dl_prev_report"
                         )
 
 # ============================================================
-# TAB 2: ONE-OFF PROPERTY SEARCH - ORIGINAL WORKFLOW
+# TAB 2: ONE-OFF PROPERTY SEARCH
 # ============================================================
 
 with main_tab2:
     st.markdown("## One-Off Property Analysis")
     st.markdown(
-        "Enter any property address for a one-time rental analysis."
+        "Enter any property address for a one-time "
+        "rental analysis."
     )
 
     st.markdown("### Step 1: Enter Property Details")
@@ -788,8 +835,7 @@ with main_tab2:
             oo_property_type = st.selectbox(
                 "Property Type",
                 options=[
-                    "Single Family", "Townhouse", "Condo",
-                    "Multi-Family", "Apartment"
+                    "Single Family", "Townhouse", "Condo"
                 ],
                 index=0
             )
@@ -807,8 +853,12 @@ with main_tab2:
 
     if submitted:
         if not oo_address or not oo_city or not oo_state:
-            st.error("Please fill in Address, City, and State!")
-        elif oo_bedrooms <= 0 or oo_bathrooms <= 0 or oo_sqft <= 0:
+            st.error(
+                "Please fill in Address, City, and State!"
+            )
+        elif (oo_bedrooms <= 0 or
+              oo_bathrooms <= 0 or
+              oo_sqft <= 0):
             st.error(
                 "Please enter valid Bedrooms, Bathrooms, "
                 "and Square Footage!"
@@ -823,12 +873,15 @@ with main_tab2:
                     bedrooms=oo_bedrooms,
                     bathrooms=oo_bathrooms,
                     living_area=oo_sqft,
-                    year_built=int(oo_year_built) if oo_year_built else None,
+                    year_built=int(
+                        oo_year_built
+                    ) if oo_year_built else None,
                     property_type=oo_property_type,
                     notes=oo_notes,
                     requester_name=oo_requester,
                 )
-            if not saved.get("latitude") or not saved.get("longitude"):
+            if (not saved.get("latitude") or
+                    not saved.get("longitude")):
                 st.error(
                     "Could not geocode this address. "
                     "Please check and try again."
@@ -836,7 +889,8 @@ with main_tab2:
             else:
                 st.success(
                     f"Property geocoded! Coordinates: "
-                    f"{saved['latitude']:.4f}, {saved['longitude']:.4f}"
+                    f"{saved['latitude']:.4f}, "
+                    f"{saved['longitude']:.4f}"
                 )
                 st.session_state["one_off_subject"] = saved
                 st.session_state["one_off_ready"] = True
@@ -848,9 +902,11 @@ with main_tab2:
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Bedrooms", subject.get("bedrooms", "N/A"))
+            st.metric("Bedrooms",
+                      subject.get("bedrooms", "N/A"))
         with col2:
-            st.metric("Bathrooms", subject.get("bathrooms", "N/A"))
+            st.metric("Bathrooms",
+                      subject.get("bathrooms", "N/A"))
         with col3:
             st.metric(
                 "Square Feet",
@@ -874,11 +930,13 @@ with main_tab2:
                 st.markdown(f"[View on Zillow]({oo_zillow})")
         with lc2:
             if oo_maps:
-                st.markdown(f"[View on Google Maps]({oo_maps})")
+                st.markdown(
+                    f"[View on Google Maps]({oo_maps})"
+                )
 
         st.info(
-            f"**{subject['address']}, {subject['city']}** | "
-            f"Radius: {radius} mi | Types: {selected_type}"
+            f"**{subject['address']}, {subject['city']}** — "
+            f"BRI will use the four-round appraisal search"
         )
         st.markdown("### Step 3: Run AI Analysis")
 
@@ -895,9 +953,7 @@ with main_tab2:
                 try:
                     result = analyze_property(
                         subject=subject,
-                        radius_miles=radius,
-                        property_types=property_types,
-                        use_rentcast=use_rentcast,
+                        use_rentcast=use_rentcast
                     )
                     st.session_state["oo_result"] = result
                     st.session_state["oo_done"] = True
@@ -922,13 +978,8 @@ with main_tab2:
                     st.metric("Radius",
                               f"{result.get('radius_used', 3)} mi")
                 with col4:
-                    total = result.get("total_leased", 0)
-                    confidence = (
-                        "HIGH" if total >= 10
-                        else "MEDIUM" if total >= 5
-                        else "LOW"
-                    )
-                    st.metric("Confidence", confidence)
+                    st.metric("Confidence",
+                              result.get("confidence", "N/A"))
 
                 st.markdown("---")
                 st.markdown(result["analysis"])
@@ -940,12 +991,11 @@ with main_tab2:
                     f"{datetime.now().strftime('%B %d, %Y %I:%M %p')}\n"
                     f"Property: {subject['address']}, "
                     f"{subject.get('city', '')}\n"
-                    f"Search Radius: "
-                    f"{result.get('radius_used')} miles\n\n"
+                    f"Confidence: "
+                    f"{result.get('confidence', 'N/A')}\n\n"
                     f"{'='*60}\n\n"
                     f"{result['analysis']}\n\n"
                     f"{'='*60}\n"
-                    f"DATA SUMMARY:\n"
                     f"Total Leased Comps: "
                     f"{result.get('total_leased', 0)}\n"
                     f"Total Active Comps: "
@@ -1000,7 +1050,9 @@ with main_tab2:
         }
         selected_recent = st.selectbox(
             "Re-analyze a recent property:",
-            options=["-- Select --"] + list(recent_options.keys()),
+            options=["-- Select --"] + list(
+                recent_options.keys()
+            ),
             key="recent_selector"
         )
         if selected_recent != "-- Select --":
