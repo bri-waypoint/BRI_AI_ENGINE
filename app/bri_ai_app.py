@@ -156,8 +156,7 @@ def build_selectable_comp_table(props, table_key, price_label="Rent/Mo"):
     sort_col = st.selectbox(
         "Sort by:",
         options=["Date", "Miles", "SqFt", "Beds", price_label],
-        key=f"sort_{table_key}",
-        horizontal=True
+        key=f"sort_{table_key}"
     ) if len(props) > 1 else "Date"
 
     if sort_col == "Miles":
