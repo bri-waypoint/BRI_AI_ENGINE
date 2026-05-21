@@ -129,100 +129,111 @@ def show_property_table(props, price_col="Rent/Mo"):
 def build_selectable_comp_table(props, table_key,
                                  price_label="Rent/Mo"):
     """
-    Display a sortable selectable comp table with Zillow links.
+    Display a sortable selectable comp table.
+    Zillow link embedded in Address cell as clickable icon.
+    Checkboxes shown as separate list for clean single-table layout.
     Returns list of selected property dicts.
     """
     if not props:
         return []
 
-    rows = []
-    for i, p in enumerate(props):
-        addr = str(p.get("address", "") or "")
-        city = str(p.get("city", "") or "")
-        zillow_url = make_zillow_url(addr, city, "ID")
-        zillow_link = (
-            f'<a href="{zillow_url}" target="_blank">🏠</a>'
-            if zillow_url else ""
-        )
-        rows.append({
-            "Select": False,
-            "Zillow": zillow_link,
-            "Address": addr,
-            "City": city,
-            "Beds": p.get("bedrooms", ""),
-            "Baths": p.get("bathrooms", ""),
-            "SqFt": format_sqft(p.get("living_area")),
-            price_label: format_price(p.get("current_price")),
-            "Date": str(
-                p.get("last_seen_date", "") or ""
-            )[:10],
-            "Miles": f"{float(p.get('distance_miles') or 0):.2f}",
-            "Type": str(p.get("home_type", "") or ""),
-            "Source": str(p.get("data_source", "") or ""),
-            "_index": i
-        })
-
-    df = pd.DataFrame(rows)
-
+    # Sort controls first
     sort_col = st.selectbox(
         "Sort by:",
         options=["Miles", "Date", "SqFt", "Beds", price_label],
         key=f"sort_{table_key}"
     ) if len(props) > 1 else "Miles"
 
+    # Build rows with sort values
+    rows = []
+    for i, p in enumerate(props):
+        addr = str(p.get("address", "") or "")
+        city = str(p.get("city", "") or "")
+        zillow_url = make_zillow_url(addr, city, "ID")
+        # Embed Zillow link in address cell
+        addr_with_link = (
+            f'{addr} <a href="{zillow_url}" target="_blank">🏠</a>'
+            if zillow_url else addr
+        )
+        miles = float(p.get("distance_miles") or 0)
+        sqft_raw = p.get("living_area")
+        price_raw = p.get("current_price")
+        date_str = str(p.get("last_seen_date", "") or "")[:10]
+
+        rows.append({
+            "Address": addr_with_link,
+            "City": city,
+            "Beds": p.get("bedrooms", ""),
+            "Baths": p.get("bathrooms", ""),
+            "SqFt": format_sqft(sqft_raw),
+            price_label: format_price(price_raw),
+            "Date": date_str,
+            "Miles": f"{miles:.2f}",
+            "_sqft_sort": float(sqft_raw) if sqft_raw else 0,
+            "_price_sort": float(price_raw) if price_raw else 0,
+            "_miles_sort": miles,
+            "_beds_sort": float(
+                p.get("bedrooms") or 0
+            ),
+            "_index": i
+        })
+
+    df = pd.DataFrame(rows)
+
+    # Apply sort
     if sort_col == "Miles":
-        df["_sort"] = pd.to_numeric(df["Miles"], errors="coerce")
-        df = df.sort_values("_sort")
+        df = df.sort_values("_miles_sort")
     elif sort_col == "Date":
         df = df.sort_values("Date", ascending=False)
     elif sort_col == "SqFt":
-        df["_sort"] = df["SqFt"].str.replace(
-            ",", ""
-        ).apply(pd.to_numeric, errors="coerce")
-        df = df.sort_values("_sort", ascending=False)
+        df = df.sort_values("_sqft_sort", ascending=False)
     elif sort_col == "Beds":
-        df["_sort"] = pd.to_numeric(df["Beds"], errors="coerce")
-        df = df.sort_values("_sort", ascending=False)
+        df = df.sort_values("_beds_sort", ascending=False)
     elif sort_col == price_label:
-        df["_sort"] = df[price_label].str.replace(
-            "[$,]", "", regex=True
-        ).apply(pd.to_numeric, errors="coerce")
-        df = df.sort_values("_sort", ascending=False)
+        df = df.sort_values("_price_sort", ascending=False)
 
-    df = df.drop(columns=["_sort"], errors="ignore")
+    # Display columns only - no sort helpers, no index
+    display_cols = [
+        "Address", "City", "Beds", "Baths",
+        "SqFt", price_label, "Date", "Miles"
+    ]
+    display_df = df[display_cols].copy()
 
-    # Show Zillow links as HTML, rest as data_editor
-    display_cols = [c for c in df.columns if c != "_index"]
-    non_link_cols = [c for c in display_cols if c != "Zillow"]
-
-    edited = st.data_editor(
-        df[non_link_cols],
-        key=f"editor_{table_key}",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Select": st.column_config.CheckboxColumn(
-                "Select",
-                help="Check to include in analysis",
-                default=False
-            )
-        }
-    )
-
-    # Show Zillow links separately below table
-    zillow_data = df[["Address", "Zillow"]].copy()
+    # Render as single HTML table with embedded Zillow links
     st.write(
-        zillow_data.to_html(
+        display_df.to_html(
             escape=False, index=False, classes="dataframe"
         ),
         unsafe_allow_html=True
     )
+    st.caption(f"Showing {len(props)} properties — "
+               f"click 🏠 to view on Zillow")
 
+    # Checkbox selection below table - clean and simple
+    st.markdown("**Select comps to include in analysis:**")
     selected = []
-    for i, row in edited.iterrows():
-        if row.get("Select"):
-            orig_index = df.iloc[i]["_index"]
-            selected.append(props[int(orig_index)])
+    for idx, row in df.iterrows():
+        orig_index = int(row["_index"])
+        p = props[orig_index]
+        addr_plain = str(p.get("address", "") or "")
+        city_plain = str(p.get("city", "") or "")
+        price_plain = format_price(p.get("current_price"))
+        date_plain = str(
+            p.get("last_seen_date", "") or ""
+        )[:10]
+        miles_plain = f"{float(p.get('distance_miles') or 0):.2f}"
+        label = (
+            f"{addr_plain}, {city_plain} — "
+            f"{price_label}: {price_plain} — "
+            f"{date_plain} — "
+            f"{miles_plain} mi"
+        )
+        checked = st.checkbox(
+            label,
+            key=f"cb_{table_key}_{orig_index}"
+        )
+        if checked:
+            selected.append(p)
 
     return selected
 
