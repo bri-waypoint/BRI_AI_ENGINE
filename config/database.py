@@ -490,25 +490,25 @@ def run_comp_search(subject, use_rentcast=True):
             'round': 1,
             'radius': 1.0,
             'months': 15,
-            'sqft_tol': 0.15,
+            'sqft_tol': 0.20,
             'bed_tol': 1,
-            'same_type': True,
+            'same_type': False,
             'confidence': 'HIGH'
         },
         {
             'round': 2,
             'radius': 2.0,
             'months': 24,
-            'sqft_tol': 0.15,
+            'sqft_tol': 0.20,
             'bed_tol': 1,
-            'same_type': True,
+            'same_type': False,
             'confidence': 'GOOD'
         },
         {
             'round': 3,
             'radius': 3.0,
             'months': 24,
-            'sqft_tol': 0.15,
+            'sqft_tol': 0.25,
             'bed_tol': 1,
             'same_type': False,
             'confidence': 'MEDIUM'
@@ -517,7 +517,7 @@ def run_comp_search(subject, use_rentcast=True):
             'round': 4,
             'radius': 5.0,
             'months': 24,
-            'sqft_tol': 0.25,
+            'sqft_tol': 0.30,
             'bed_tol': 2,
             'same_type': False,
             'confidence': 'LOW'
@@ -589,13 +589,17 @@ def run_comp_search(subject, use_rentcast=True):
         print(f"   Leased after filter: {len(filtered_leased)} | "
               f"Active after filter: {len(filtered_active)}")
 
-        # Update best results so far
+        # Update best results so far - track the round
+        # that produced the most leased comps
         if len(filtered_leased) > len(final_leased):
             final_leased = filtered_leased
+            final_confidence = r['confidence']
+            final_round = r['round']
+            final_radius = r['radius']
         if len(filtered_active) > len(final_active):
             final_active = filtered_active
 
-        # Check stop condition
+        # Check stop condition - hit target on both
         if (len(filtered_leased) >= target and
                 len(filtered_active) >= target):
             final_confidence = r['confidence']
@@ -604,11 +608,6 @@ def run_comp_search(subject, use_rentcast=True):
             print(f"   Target reached at Round {r['round']} — "
                   f"stopping search")
             break
-
-        # Update confidence to current round even if not stopping
-        final_confidence = r['confidence']
-        final_round = r['round']
-        final_radius = r['radius']
 
     # Sort by distance then recency
     def sort_key(p):
