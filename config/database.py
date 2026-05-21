@@ -370,7 +370,7 @@ def get_nearby_vault_properties(lat, lon, radius_miles=3.0,
     bbox = get_bounding_box(lat, lon, radius_miles)
     type_placeholders = ','.join(['%s'] * len(property_types))
 
-    query = f"""
+    select_base = f"""
         SELECT
             zpid as id,
             address,
@@ -398,26 +398,38 @@ def get_nearby_vault_properties(lat, lon, radius_miles=3.0,
             AND CAST(longitude AS FLOAT) BETWEEN %s AND %s
             AND (home_type IN ({type_placeholders})
                  OR home_type IS NULL)
-            AND (
-                (listing_status LIKE 'LEASED%%'
-                 AND last_seen_date >= TO_CHAR(
-                     CURRENT_DATE - INTERVAL '15 months',
-                     'YYYY-MM-DD'))
-                OR listing_status LIKE '%%ACTIVE%%'
-            )
-        LIMIT 500
     """
 
-    params = (
+    base_params = (
         bbox['min_lat'], bbox['max_lat'],
         bbox['min_lon'], bbox['max_lon'],
         *property_types
     )
 
-    cursor.execute(query, params)
-    columns = [desc[0] for desc in cursor.description]
+    # Fetch leased and active separately so neither crowds the other out
+    leased_query = select_base + """
+            AND listing_status LIKE 'LEASED%%'
+            AND last_seen_date >= TO_CHAR(
+                CURRENT_DATE - INTERVAL '15 months',
+                'YYYY-MM-DD')
+        LIMIT 300
+    """
+
+    active_query = select_base + """
+            AND listing_status LIKE '%%ACTIVE%%'
+        LIMIT 300
+    """
+
     raw_results = []
 
+    cursor.execute(leased_query, base_params)
+    columns = [desc[0] for desc in cursor.description]
+    for row in cursor.fetchall():
+        prop = {col: clean_value(val)
+                for col, val in zip(columns, row)}
+        raw_results.append(prop)
+
+    cursor.execute(active_query, base_params)
     for row in cursor.fetchall():
         prop = {col: clean_value(val)
                 for col, val in zip(columns, row)}
