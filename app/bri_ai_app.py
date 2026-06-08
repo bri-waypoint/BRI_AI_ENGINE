@@ -1,10 +1,8 @@
 # app/bri_ai_app.py
 # BRI AI Engine - Streamlit Interface
-# UPDATED: Four-round appraisal comp search workflow
-#          Zillow URL clickable in comp selection tables
-#          Confidence score shows which round search stopped at
-#          Distance-first sort matching appraisal methodology
-#          Notes saved per property, reports saved to database
+# UPDATED: Fixed inline checkbox + Zillow link table layout
+#          One-off search now uses two-step comp selection
+#          Bug fix: removed unreachable return in make_google_maps_url
 
 import streamlit as st
 import pandas as pd
@@ -63,7 +61,6 @@ def make_google_maps_url(address, city, state):
         full = f"{address}, {city}, {state}"
         encoded = urllib.parse.quote(full)
         return f"https://www.google.com/maps/search/?api=1&query={encoded}"
-        return None
     except Exception:
         return None
 
@@ -78,164 +75,6 @@ def format_sqft(val):
         return f"{int(val):,}"
     except Exception:
         return "N/A"
-
-def show_property_table(props, price_col="Rent/Mo"):
-    """Display a read-only property table."""
-    if not props:
-        st.info("No properties in this category.")
-        return
-    df = pd.DataFrame(props)
-    col_map = {
-        "address": "Address",
-        "city": "City",
-        "bedrooms": "Beds",
-        "bathrooms": "Baths",
-        "living_area": "SqFt",
-        "current_price": price_col,
-        "last_seen_date": "Date",
-        "distance_miles": "Miles",
-        "home_type": "Type",
-        "data_source": "Source",
-    }
-    avail = {k: v for k, v in col_map.items() if k in df.columns}
-    display_df = df[list(avail.keys())].copy()
-    display_df.columns = list(avail.values())
-
-    links = []
-    for _, row in display_df.iterrows():
-        addr = str(row.get("Address", "") or "")
-        city = str(row.get("City", "") or "")
-        zillow = make_zillow_url(addr, city, "ID")
-        maps = make_google_maps_url(addr, city, "ID")
-        parts = []
-        if zillow:
-            parts.append(
-                f'<a href="{zillow}" target="_blank">🏠 Zillow</a>'
-            )
-        if maps:
-            parts.append(
-                f'<a href="{maps}" target="_blank">📍 Map</a>'
-            )
-        links.append(" | ".join(parts) if parts else "N/A")
-    display_df["Links"] = links
-
-    st.write(
-        display_df.to_html(escape=False, index=False,
-                           classes="dataframe"),
-        unsafe_allow_html=True,
-    )
-    st.caption(f"Showing {len(props)} properties")
-
-def build_selectable_comp_table(props, table_key,
-                                 price_label="Rent/Mo"):
-    """
-    Display a sortable selectable comp table.
-    Zillow link embedded in Address cell as clickable icon.
-    Checkboxes shown as separate list for clean single-table layout.
-    Returns list of selected property dicts.
-    """
-    if not props:
-        return []
-
-    # Sort controls first
-    sort_col = st.selectbox(
-        "Sort by:",
-        options=["Miles", "Date", "SqFt", "Beds", price_label],
-        key=f"sort_{table_key}"
-    ) if len(props) > 1 else "Miles"
-
-    # Build rows with sort values
-    rows = []
-    for i, p in enumerate(props):
-        addr = str(p.get("address", "") or "")
-        city = str(p.get("city", "") or "")
-        zillow_url = make_zillow_url(addr, city, "ID")
-        # Embed Zillow link in address cell
-        addr_with_link = (
-            f'{addr} <a href="{zillow_url}" target="_blank">🏠</a>'
-            if zillow_url else addr
-        )
-        miles = float(p.get("distance_miles") or 0)
-        sqft_raw = p.get("living_area")
-        price_raw = p.get("current_price")
-        date_str = str(p.get("last_seen_date", "") or "")[:10]
-
-        rows.append({
-            "Address": addr_with_link,
-            "City": city,
-            "Beds": p.get("bedrooms", ""),
-            "Baths": p.get("bathrooms", ""),
-            "SqFt": format_sqft(sqft_raw),
-            price_label: format_price(price_raw),
-            "Date": date_str,
-            "Miles": f"{miles:.2f}",
-            "_sqft_sort": float(sqft_raw) if sqft_raw else 0,
-            "_price_sort": float(price_raw) if price_raw else 0,
-            "_miles_sort": miles,
-            "_beds_sort": float(
-                p.get("bedrooms") or 0
-            ),
-            "_index": i
-        })
-
-    df = pd.DataFrame(rows)
-
-    # Apply sort
-    if sort_col == "Miles":
-        df = df.sort_values("_miles_sort")
-    elif sort_col == "Date":
-        df = df.sort_values("Date", ascending=False)
-    elif sort_col == "SqFt":
-        df = df.sort_values("_sqft_sort", ascending=False)
-    elif sort_col == "Beds":
-        df = df.sort_values("_beds_sort", ascending=False)
-    elif sort_col == price_label:
-        df = df.sort_values("_price_sort", ascending=False)
-
-    # Display columns only - no sort helpers, no index
-    display_cols = [
-        "Address", "City", "Beds", "Baths",
-        "SqFt", price_label, "Date", "Miles"
-    ]
-    display_df = df[display_cols].copy()
-
-    # Render as single HTML table with embedded Zillow links
-    st.write(
-        display_df.to_html(
-            escape=False, index=False, classes="dataframe"
-        ),
-        unsafe_allow_html=True
-    )
-    st.caption(f"Showing {len(props)} properties — "
-               f"click 🏠 to view on Zillow")
-
-    # Checkbox selection below table - clean and simple
-    st.markdown("**Select comps to include in analysis:**")
-    selected = []
-    for idx, row in df.iterrows():
-        orig_index = int(row["_index"])
-        p = props[orig_index]
-        addr_plain = str(p.get("address", "") or "")
-        city_plain = str(p.get("city", "") or "")
-        price_plain = format_price(p.get("current_price"))
-        date_plain = str(
-            p.get("last_seen_date", "") or ""
-        )[:10]
-        miles_plain = f"{float(p.get('distance_miles') or 0):.2f}"
-        label = (
-            f"{addr_plain}, {city_plain} — "
-            f"{price_label}: {price_plain} — "
-            f"{date_plain} — "
-            f"{miles_plain} mi"
-        )
-        checked = st.checkbox(
-            label,
-            key=f"cb_{table_key}_{orig_index}"
-        )
-        if checked:
-            selected.append(p)
-
-    return selected
 
 def confidence_display(confidence, round_stopped, radius_used):
     """Show confidence badge with search details."""
@@ -259,6 +98,121 @@ def confidence_display(confidence, round_stopped, radius_used):
     }
     msg = messages.get(confidence, f'Round {round_stopped}')
     return f"{icon} {msg}"
+
+def build_selectable_comp_table(props, table_key,
+                                price_label="Rent/Mo"):
+    """
+    Display a sortable selectable comp table.
+    Each row uses st.columns so checkbox and Zillow link
+    are truly inline with all property data on one row.
+    Returns list of selected property dicts.
+    """
+    if not props:
+        return []
+
+    # Sort controls
+    sort_col = st.selectbox(
+        "Sort by:",
+        options=["Miles", "Date", "SqFt", "Beds", price_label],
+        key=f"sort_{table_key}"
+    ) if len(props) > 1 else "Miles"
+
+    # Sort the props list
+    def sort_key(p):
+        if sort_col == "Miles":
+            return float(p.get("distance_miles") or 99)
+        elif sort_col == "Date":
+            return str(p.get("last_seen_date") or "")
+        elif sort_col == "SqFt":
+            return -(float(p.get("living_area") or 0))
+        elif sort_col == "Beds":
+            return -(float(p.get("bedrooms") or 0))
+        else:
+            return -(float(p.get("current_price") or 0))
+
+    if sort_col == "Date":
+        sorted_props = sorted(
+            enumerate(props),
+            key=lambda x: str(
+                x[1].get("last_seen_date") or ""
+            ),
+            reverse=True
+        )
+    else:
+        sorted_props = sorted(
+            enumerate(props),
+            key=lambda x: sort_key(x[1])
+        )
+
+    # Column header row
+    h = st.columns([0.4, 2.8, 0.7, 0.5, 0.5,
+                    0.8, 0.9, 0.9, 0.6])
+    headers = ["", "Address", "City", "Bed",
+               "Bath", "SqFt", price_label, "Date", "Mi"]
+    for col, hdr in zip(h, headers):
+        col.markdown(f"**{hdr}**")
+    st.markdown(
+        "<hr style='margin:2px 0 6px 0;border-color:#ddd;'>",
+        unsafe_allow_html=True
+    )
+
+    selected = []
+    for orig_index, p in sorted_props:
+        addr = str(p.get("address", "") or "")
+        city = str(p.get("city", "") or "")
+        zillow_url = make_zillow_url(addr, city, "ID")
+        beds = str(p.get("bedrooms", "") or "")
+        baths = str(p.get("bathrooms", "") or "")
+        sqft = format_sqft(p.get("living_area"))
+        price = format_price(p.get("current_price"))
+        date = str(p.get("last_seen_date") or "")[:10]
+        miles = f"{float(p.get('distance_miles') or 0):.2f}"
+
+        # Shorten address for display if too long
+        addr_display = addr[:35] + "…" if len(addr) > 35 else addr
+
+        row = st.columns([0.4, 2.8, 0.7, 0.5, 0.5,
+                          0.8, 0.9, 0.9, 0.6])
+
+        with row[0]:
+            checked = st.checkbox(
+                "",
+                key=f"cb_{table_key}_{orig_index}",
+                label_visibility="collapsed"
+            )
+        with row[1]:
+            if zillow_url:
+                st.markdown(
+                    f'{addr_display} '
+                    f'<a href="{zillow_url}" '
+                    f'target="_blank">🏠</a>',
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(addr_display)
+        with row[2]:
+            st.markdown(city)
+        with row[3]:
+            st.markdown(beds)
+        with row[4]:
+            st.markdown(baths)
+        with row[5]:
+            st.markdown(sqft)
+        with row[6]:
+            st.markdown(price)
+        with row[7]:
+            st.markdown(date)
+        with row[8]:
+            st.markdown(miles)
+
+        if checked:
+            selected.append(p)
+
+    st.caption(
+        f"Showing {len(props)} properties — "
+        f"click 🏠 to view on Zillow"
+    )
+    return selected
 
 # ============================================================
 # LOAD DATA
@@ -339,6 +293,306 @@ main_tab1, main_tab2 = st.tabs([
 ])
 
 # ============================================================
+# SHARED COMP SELECTION + REPORT DISPLAY LOGIC
+# Used by both portfolio and one-off search tabs
+# ============================================================
+
+def run_comp_selection_and_report(
+    subject, property_id, notes,
+    use_rentcast, tab_key,
+    save_report=True
+):
+    """
+    Shared two-step workflow used by both tabs.
+    tab_key keeps session state separate between tabs.
+    save_report=True saves to database (portfolio only).
+    """
+    # --------------------------------------------------------
+    # STEP 1: FIND COMPS
+    # --------------------------------------------------------
+    st.markdown("### Step 1 — Find Comps")
+    st.info(
+        f"**{subject.get('address')}, "
+        f"{subject.get('city')}** — "
+        f"BRI will search using the four-round appraisal "
+        f"method, expanding radius until 25+ similar "
+        f"properties are found."
+    )
+
+    if st.button(
+        "🔍 Find Comps",
+        type="primary",
+        use_container_width=True,
+        key=f"find_comps_{tab_key}"
+    ):
+        with st.spinner(
+            "Running appraisal comp search... (15-30 seconds)"
+        ):
+            try:
+                comp_result = get_comparable_properties(
+                    subject=subject,
+                    use_rentcast=use_rentcast
+                )
+                st.session_state[
+                    f"comp_result_{tab_key}"
+                ] = comp_result
+                st.session_state[
+                    f"comps_ready_{tab_key}"
+                ] = True
+                st.session_state[
+                    f"report_ready_{tab_key}"
+                ] = False
+                st.session_state[
+                    f"report_result_{tab_key}"
+                ] = None
+            except Exception as e:
+                st.error(f"Comp search failed: {str(e)}")
+                st.exception(e)
+
+    # --------------------------------------------------------
+    # STEP 2: SELECT COMPS
+    # --------------------------------------------------------
+    if st.session_state.get(f"comps_ready_{tab_key}"):
+        comp_result = st.session_state[
+            f"comp_result_{tab_key}"
+        ]
+        leased_comps = comp_result.get("leased", [])
+        active_comps = comp_result.get("active", [])
+        confidence = comp_result.get("confidence", "LOW")
+        round_stopped = comp_result.get("round_stopped", 4)
+        radius_used = comp_result.get("radius_used", 5.0)
+
+        st.markdown("---")
+
+        # Confidence display
+        conf_msg = confidence_display(
+            confidence, round_stopped, radius_used
+        )
+        if confidence == 'HIGH':
+            st.success(conf_msg)
+        elif confidence == 'GOOD':
+            st.info(conf_msg)
+        elif confidence == 'MEDIUM':
+            st.warning(conf_msg)
+        else:
+            st.error(conf_msg)
+
+        st.markdown("### Step 2 — Select Your Comps")
+        st.markdown(
+            "Review the comps below. "
+            "**Select at least 3 leased and 1 active** "
+            "then click Generate Report. "
+            "Click 🏠 to view any property on Zillow."
+        )
+
+        comp_tab1, comp_tab2 = st.tabs([
+            f"🏠 Leased Comps ({len(leased_comps)} found)",
+            f"📋 Active Listings ({len(active_comps)} found)"
+        ])
+
+        with comp_tab1:
+            if not leased_comps:
+                st.error("No leased comps found.")
+                selected_leased = []
+            else:
+                selected_leased = build_selectable_comp_table(
+                    leased_comps,
+                    table_key=f"leased_{tab_key}",
+                    price_label="Leased/Mo"
+                )
+                if selected_leased:
+                    st.success(
+                        f"✓ {len(selected_leased)} leased "
+                        f"comp(s) selected"
+                    )
+                else:
+                    st.warning("No leased comps selected yet")
+
+        with comp_tab2:
+            if not active_comps:
+                st.warning(
+                    "No active listings found. "
+                    "Analysis will rely on leased comps only."
+                )
+                selected_active = []
+            else:
+                selected_active = build_selectable_comp_table(
+                    active_comps,
+                    table_key=f"active_{tab_key}",
+                    price_label="Asking/Mo"
+                )
+                if selected_active:
+                    st.success(
+                        f"✓ {len(selected_active)} active "
+                        f"listing(s) selected"
+                    )
+                else:
+                    st.warning(
+                        "No active listings selected yet"
+                    )
+
+        st.markdown("---")
+
+        # Validate minimums
+        leased_ok = len(selected_leased) >= 3
+        active_ok = len(selected_active) >= 1
+
+        if not leased_ok:
+            st.warning(
+                f"Please select at least 3 leased comps "
+                f"(currently {len(selected_leased)} selected)"
+            )
+        if not active_ok and active_comps:
+            st.warning(
+                "Please select at least 1 active listing"
+            )
+
+        # --------------------------------------------------------
+        # STEP 3: GENERATE REPORT
+        # --------------------------------------------------------
+        st.markdown("### Step 3 — Generate Market Report")
+
+        can_generate = leased_ok and (
+            active_ok or not active_comps
+        )
+
+        if st.button(
+            "📊 Generate Market Report",
+            type="primary",
+            use_container_width=True,
+            key=f"generate_report_{tab_key}",
+            disabled=not can_generate
+        ):
+            subject_with_notes = dict(subject)
+            subject_with_notes["notes"] = notes
+
+            with st.spinner(
+                "Analyzing with Claude AI... (30-60 seconds)"
+            ):
+                try:
+                    result = generate_report(
+                        subject=subject_with_notes,
+                        selected_leased=selected_leased,
+                        selected_active=selected_active
+                    )
+                    result["radius_used"] = radius_used
+                    result["confidence"] = confidence
+                    result["round_stopped"] = round_stopped
+                    st.session_state[
+                        f"report_result_{tab_key}"
+                    ] = result
+                    st.session_state[
+                        f"report_ready_{tab_key}"
+                    ] = True
+
+                    # Save to database for portfolio only
+                    if save_report and property_id:
+                        all_selected = (
+                            selected_leased + selected_active
+                        )
+                        report_id = save_analysis_report(
+                            property_id=property_id,
+                            property_address=subject.get(
+                                "address", ""),
+                            property_city=subject.get(
+                                "city", ""),
+                            report_text=result["analysis"],
+                            selected_comps=all_selected,
+                            vault_leased_count=len(
+                                result.get("vault_leased", [])),
+                            rentcast_leased_count=len(
+                                result.get(
+                                    "rentcast_leased", [])),
+                            total_leased_count=result.get(
+                                "total_leased", 0),
+                            total_active_count=result.get(
+                                "total_active", 0),
+                            radius_used=radius_used,
+                            property_notes=notes
+                        )
+                        if report_id:
+                            st.success(
+                                f"Report generated and saved! "
+                                f"(Report #{report_id})"
+                            )
+                        else:
+                            st.success("Report generated!")
+                    else:
+                        st.success("Report generated!")
+
+                except Exception as e:
+                    st.error(f"Analysis failed: {str(e)}")
+                    st.exception(e)
+
+    # --------------------------------------------------------
+    # DISPLAY REPORT
+    # --------------------------------------------------------
+    if st.session_state.get(f"report_ready_{tab_key}"):
+        result = st.session_state.get(
+            f"report_result_{tab_key}"
+        )
+        if result:
+            st.markdown("---")
+            st.markdown("## Market Report")
+
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                st.metric("Vault Leased",
+                          len(result.get("vault_leased", [])))
+            with col2:
+                st.metric("RentCast Leased",
+                          len(result.get(
+                              "rentcast_leased", [])))
+            with col3:
+                st.metric("Total Leased",
+                          result.get("total_leased", 0))
+            with col4:
+                st.metric("Active Used",
+                          result.get("total_active", 0))
+            with col5:
+                st.metric("Confidence",
+                          result.get("confidence", "N/A"))
+
+            st.markdown("---")
+            st.markdown(result["analysis"])
+
+            addr = subject.get("address", "property")
+            export_text = (
+                f"BRI RENTAL ANALYSIS REPORT\n"
+                f"Generated: "
+                f"{datetime.now().strftime('%B %d, %Y %I:%M %p')}\n"
+                f"Property: {subject.get('address', '')}, "
+                f"{subject.get('city', '')}\n"
+                f"Search Radius: "
+                f"{result.get('radius_used')} miles\n"
+                f"Confidence: {result.get('confidence')}\n"
+                f"Notes: {notes}\n\n"
+                f"{'='*60}\n\n"
+                f"{result['analysis']}\n\n"
+                f"{'='*60}\n"
+                f"DATA SUMMARY:\n"
+                f"Vault Leased: "
+                f"{len(result.get('vault_leased', []))}\n"
+                f"RentCast Leased: "
+                f"{len(result.get('rentcast_leased', []))}\n"
+                f"Total Leased Comps: "
+                f"{result.get('total_leased', 0)}\n"
+                f"Total Active Comps: "
+                f"{result.get('total_active', 0)}\n"
+            )
+            st.download_button(
+                label="⬇️ Download Report",
+                data=export_text,
+                file_name=(
+                    f"BRI_{addr.replace(' ', '_')}_"
+                    f"{datetime.now().strftime('%Y%m%d')}.txt"
+                ),
+                mime="text/plain",
+                use_container_width=True,
+                key=f"dl_report_{tab_key}"
+            )
+
+# ============================================================
 # TAB 1: SHANNYN PORTFOLIO
 # ============================================================
 
@@ -370,10 +624,10 @@ with main_tab1:
         # Reset workflow when property changes
         if st.session_state.get("last_property_id") != property_id:
             st.session_state["last_property_id"] = property_id
-            st.session_state["comps_ready"] = False
-            st.session_state["comp_result"] = None
-            st.session_state["report_ready"] = False
-            st.session_state["report_result"] = None
+            st.session_state["comps_ready_portfolio"] = False
+            st.session_state["comp_result_portfolio"] = None
+            st.session_state["report_ready_portfolio"] = False
+            st.session_state["report_result_portfolio"] = None
             saved = get_property_notes(property_id)
             st.session_state["loaded_notes"] = saved
 
@@ -418,7 +672,8 @@ with main_tab1:
         notes = st.text_area(
             "Property Notes (saved per property)",
             value=st.session_state.get("loaded_notes", ""),
-            placeholder="e.g., 2-car garage, renovated kitchen...",
+            placeholder="e.g., 2-car garage, renovated kitchen, "
+                        "renewal pricing, new listing...",
             height=70,
             key=f"notes_{property_id}"
         )
@@ -432,290 +687,19 @@ with main_tab1:
 
         st.markdown("---")
 
-        # --------------------------------------------------------
-        # STEP 1: FIND COMPS
-        # --------------------------------------------------------
-
-        st.markdown(
-            f"### Step 1 — Find Comps"
+        # Run shared two-step workflow
+        run_comp_selection_and_report(
+            subject=subject,
+            property_id=property_id,
+            notes=notes,
+            use_rentcast=use_rentcast,
+            tab_key="portfolio",
+            save_report=True
         )
-        st.info(
-            f"**{subject['address']}, {subject['city']}** — "
-            f"BRI will search using the four-round appraisal "
-            f"method, expanding radius until 25+ similar "
-            f"properties are found."
-        )
-
-        if st.button(
-            "🔍 Find Comps",
-            type="primary",
-            use_container_width=True,
-            key="find_comps_btn"
-        ):
-            with st.spinner(
-                "Running appraisal comp search... (15-30 seconds)"
-            ):
-                try:
-                    comp_result = get_comparable_properties(
-                        subject=subject,
-                        use_rentcast=use_rentcast
-                    )
-                    st.session_state["comp_result"] = comp_result
-                    st.session_state["comps_ready"] = True
-                    st.session_state["report_ready"] = False
-                    st.session_state["report_result"] = None
-                except Exception as e:
-                    st.error(f"Comp search failed: {str(e)}")
-                    st.exception(e)
-
-        # --------------------------------------------------------
-        # STEP 2: SELECT COMPS
-        # --------------------------------------------------------
-
-        if st.session_state.get("comps_ready"):
-            comp_result = st.session_state["comp_result"]
-            leased_comps = comp_result.get("leased", [])
-            active_comps = comp_result.get("active", [])
-            confidence = comp_result.get("confidence", "LOW")
-            round_stopped = comp_result.get("round_stopped", 4)
-            radius_used = comp_result.get("radius_used", 5.0)
-
-            st.markdown("---")
-
-            # Confidence display
-            conf_msg = confidence_display(
-                confidence, round_stopped, radius_used
-            )
-            if confidence == 'HIGH':
-                st.success(conf_msg)
-            elif confidence == 'GOOD':
-                st.info(conf_msg)
-            elif confidence == 'MEDIUM':
-                st.warning(conf_msg)
-            else:
-                st.error(conf_msg)
-
-            st.markdown("### Step 2 — Select Your Comps")
-            st.markdown(
-                "Review the comps below. "
-                "**Select at least 3 leased and 1 active** "
-                "then click Generate Report. "
-                "Click 🏠 to view any property on Zillow."
-            )
-
-            comp_tab1, comp_tab2 = st.tabs([
-                f"🏠 Leased Comps ({len(leased_comps)} found)",
-                f"📋 Active Listings ({len(active_comps)} found)"
-            ])
-
-            with comp_tab1:
-                if not leased_comps:
-                    st.error(
-                        "No leased comps found. "
-                        "Try disabling property type filters."
-                    )
-                    selected_leased = []
-                else:
-                    st.markdown(
-                        "Check the boxes for leased properties "
-                        "to include in analysis:"
-                    )
-                    selected_leased = build_selectable_comp_table(
-                        leased_comps,
-                        table_key="leased",
-                        price_label="Leased/Mo"
-                    )
-                    if selected_leased:
-                        st.success(
-                            f"✓ {len(selected_leased)} leased "
-                            f"comp(s) selected"
-                        )
-                    else:
-                        st.warning("No leased comps selected yet")
-
-            with comp_tab2:
-                if not active_comps:
-                    st.warning(
-                        "No active listings found. "
-                        "Analysis will rely on leased comps only."
-                    )
-                    selected_active = []
-                else:
-                    st.markdown(
-                        "Check the boxes for active listings "
-                        "to include in analysis:"
-                    )
-                    selected_active = build_selectable_comp_table(
-                        active_comps,
-                        table_key="active",
-                        price_label="Asking/Mo"
-                    )
-                    if selected_active:
-                        st.success(
-                            f"✓ {len(selected_active)} active "
-                            f"listing(s) selected"
-                        )
-                    else:
-                        st.warning(
-                            "No active listings selected yet"
-                        )
-
-            st.markdown("---")
-
-            # Validate minimums
-            leased_ok = len(selected_leased) >= 3
-            active_ok = len(selected_active) >= 1
-
-            if not leased_ok:
-                st.warning(
-                    f"Please select at least 3 leased comps "
-                    f"(currently {len(selected_leased)} selected)"
-                )
-            if not active_ok and active_comps:
-                st.warning(
-                    "Please select at least 1 active listing"
-                )
-
-            # --------------------------------------------------------
-            # STEP 3: GENERATE REPORT
-            # --------------------------------------------------------
-
-            st.markdown("### Step 3 — Generate Market Report")
-
-            can_generate = leased_ok and (
-                active_ok or not active_comps
-            )
-
-            if st.button(
-                "📊 Generate Market Report",
-                type="primary",
-                use_container_width=True,
-                key="generate_report_btn",
-                disabled=not can_generate
-            ):
-                subject_with_notes = dict(subject)
-                subject_with_notes["notes"] = notes
-
-                with st.spinner(
-                    "Analyzing with Claude AI... "
-                    "(30-60 seconds)"
-                ):
-                    try:
-                        result = generate_report(
-                            subject=subject_with_notes,
-                            selected_leased=selected_leased,
-                            selected_active=selected_active
-                        )
-                        result["radius_used"] = radius_used
-                        result["confidence"] = confidence
-                        result["round_stopped"] = round_stopped
-                        st.session_state["report_result"] = result
-                        st.session_state["report_ready"] = True
-
-                        # Save report
-                        all_selected = (
-                            selected_leased + selected_active
-                        )
-                        report_id = save_analysis_report(
-                            property_id=property_id,
-                            property_address=subject.get(
-                                "address", ""),
-                            property_city=subject.get("city", ""),
-                            report_text=result["analysis"],
-                            selected_comps=all_selected,
-                            vault_leased_count=len(result.get(
-                                "vault_leased", [])),
-                            rentcast_leased_count=len(result.get(
-                                "rentcast_leased", [])),
-                            total_leased_count=result.get(
-                                "total_leased", 0),
-                            total_active_count=result.get(
-                                "total_active", 0),
-                            radius_used=radius_used,
-                            property_notes=notes
-                        )
-                        if report_id:
-                            st.success(
-                                f"Report generated and saved! "
-                                f"(Report #{report_id})"
-                            )
-                        else:
-                            st.success("Report generated!")
-
-                    except Exception as e:
-                        st.error(f"Analysis failed: {str(e)}")
-                        st.exception(e)
-
-        # --------------------------------------------------------
-        # DISPLAY REPORT
-        # --------------------------------------------------------
-
-        if st.session_state.get("report_ready"):
-            result = st.session_state["report_result"]
-            if result:
-                st.markdown("---")
-                st.markdown("## Market Report")
-
-                col1, col2, col3, col4, col5 = st.columns(5)
-                with col1:
-                    st.metric("Vault Leased",
-                              len(result.get("vault_leased", [])))
-                with col2:
-                    st.metric("RentCast Leased",
-                              len(result.get(
-                                  "rentcast_leased", [])))
-                with col3:
-                    st.metric("Total Leased",
-                              result.get("total_leased", 0))
-                with col4:
-                    st.metric("Active Used",
-                              result.get("total_active", 0))
-                with col5:
-                    st.metric("Confidence",
-                              result.get("confidence", "N/A"))
-
-                st.markdown("---")
-                st.markdown(result["analysis"])
-
-                addr = subject.get("address", "property")
-                export_text = (
-                    f"BRI RENTAL ANALYSIS REPORT\n"
-                    f"Generated: "
-                    f"{datetime.now().strftime('%B %d, %Y %I:%M %p')}\n"
-                    f"Property: {subject['address']}, "
-                    f"{subject.get('city', '')}\n"
-                    f"Search Radius: "
-                    f"{result.get('radius_used')} miles\n"
-                    f"Confidence: {result.get('confidence')}\n"
-                    f"Notes: {notes}\n\n"
-                    f"{'='*60}\n\n"
-                    f"{result['analysis']}\n\n"
-                    f"{'='*60}\n"
-                    f"DATA SUMMARY:\n"
-                    f"Vault Leased: "
-                    f"{len(result.get('vault_leased', []))}\n"
-                    f"RentCast Leased: "
-                    f"{len(result.get('rentcast_leased', []))}\n"
-                    f"Total Leased Comps: "
-                    f"{result.get('total_leased', 0)}\n"
-                    f"Total Active Comps: "
-                    f"{result.get('total_active', 0)}\n"
-                )
-                st.download_button(
-                    label="⬇️ Download Report",
-                    data=export_text,
-                    file_name=(
-                        f"BRI_{addr.replace(' ', '_')}_"
-                        f"{datetime.now().strftime('%Y%m%d')}.txt"
-                    ),
-                    mime="text/plain",
-                    use_container_width=True,
-                )
 
         # --------------------------------------------------------
         # PREVIOUS REPORTS
         # --------------------------------------------------------
-
         if property_id:
             st.markdown("---")
             with st.expander(
@@ -737,7 +721,8 @@ with main_tab1:
                     )
                     report_options = {
                         f"Report from {r['created_at']} — "
-                        f"{r['total_leased_count']} leased comps": r
+                        f"{r['total_leased_count']} "
+                        f"leased comps": r
                         for r in prev_reports
                     }
                     selected_report_label = st.selectbox(
@@ -754,17 +739,20 @@ with main_tab1:
                         with col1:
                             st.metric(
                                 "Leased Comps Used",
-                                prev.get("total_leased_count", 0)
+                                prev.get(
+                                    "total_leased_count", 0)
                             )
                         with col2:
                             st.metric(
                                 "Active Comps Used",
-                                prev.get("total_active_count", 0)
+                                prev.get(
+                                    "total_active_count", 0)
                             )
                         with col3:
                             st.metric(
                                 "Radius Used",
-                                f"{prev.get('radius_used', 0)} mi"
+                                f"{prev.get('radius_used', 0)}"
+                                f" mi"
                             )
                         if prev.get("property_notes"):
                             st.info(
@@ -776,7 +764,8 @@ with main_tab1:
                         dl_text = (
                             f"BRI RENTAL ANALYSIS REPORT\n"
                             f"Generated: {prev['created_at']}\n"
-                            f"Property: {subject['address']}, "
+                            f"Property: "
+                            f"{subject['address']}, "
                             f"{subject.get('city', '')}\n\n"
                             f"{'='*60}\n\n"
                             f"{prev['report_text']}\n"
@@ -853,11 +842,12 @@ with main_tab2:
 
         oo_notes = st.text_area(
             "Additional Notes",
-            placeholder="e.g., 2-car garage, updated kitchen...",
+            placeholder="e.g., 2-car garage, updated kitchen, "
+                        "renewal pricing, new listing...",
             height=70
         )
         submitted = st.form_submit_button(
-            "Geocode and Analyze Property",
+            "Geocode Property",
             type="primary",
             use_container_width=True
         )
@@ -903,11 +893,18 @@ with main_tab2:
                     f"{saved['latitude']:.4f}, "
                     f"{saved['longitude']:.4f}"
                 )
-                st.session_state["one_off_subject"] = saved
-                st.session_state["one_off_ready"] = True
+                # Reset one-off workflow state
+                st.session_state["oo_subject"] = saved
+                st.session_state["oo_ready"] = True
+                st.session_state["comps_ready_oneoff"] = False
+                st.session_state["comp_result_oneoff"] = None
+                st.session_state["report_ready_oneoff"] = False
+                st.session_state["report_result_oneoff"] = None
 
-    if st.session_state.get("one_off_ready"):
-        subject = st.session_state["one_off_subject"]
+    if st.session_state.get("oo_ready"):
+        subject = st.session_state["oo_subject"]
+        oo_notes_val = subject.get("notes", "")
+
         st.markdown("---")
         st.markdown("### Step 2: Review Property Details")
 
@@ -945,90 +942,30 @@ with main_tab2:
                     f"[View on Google Maps]({oo_maps})"
                 )
 
-        st.info(
-            f"**{subject['address']}, {subject['city']}** — "
-            f"BRI will use the four-round appraisal search"
+        st.markdown("---")
+
+        # Run shared two-step workflow
+        # save_report=False for one-off searches
+        run_comp_selection_and_report(
+            subject=subject,
+            property_id=None,
+            notes=oo_notes_val,
+            use_rentcast=use_rentcast,
+            tab_key="oneoff",
+            save_report=False
         )
-        st.markdown("### Step 3: Run AI Analysis")
 
         if st.button(
-            "Analyze with AI",
-            type="primary",
-            use_container_width=True,
-            key="one_off_analyze"
-        ):
-            with st.spinner(
-                "Searching + analyzing with Claude AI... "
-                "(30-60 seconds)"
-            ):
-                try:
-                    result = analyze_property(
-                        subject=subject,
-                        use_rentcast=use_rentcast
-                    )
-                    st.session_state["oo_result"] = result
-                    st.session_state["oo_done"] = True
-                except Exception as e:
-                    st.error(f"Analysis failed: {str(e)}")
-                    st.exception(e)
-
-        if st.session_state.get("oo_done"):
-            result = st.session_state.get("oo_result")
-            if result:
-                st.markdown("---")
-                st.markdown("## Analysis Results")
-
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Total Leased",
-                              result.get("total_leased", 0))
-                with col2:
-                    st.metric("Total Active",
-                              result.get("total_active", 0))
-                with col3:
-                    st.metric("Radius",
-                              f"{result.get('radius_used', 3)} mi")
-                with col4:
-                    st.metric("Confidence",
-                              result.get("confidence", "N/A"))
-
-                st.markdown("---")
-                st.markdown(result["analysis"])
-
-                addr = subject.get("address", "property")
-                export_text = (
-                    f"BRI RENTAL ANALYSIS REPORT\n"
-                    f"Generated: "
-                    f"{datetime.now().strftime('%B %d, %Y %I:%M %p')}\n"
-                    f"Property: {subject['address']}, "
-                    f"{subject.get('city', '')}\n"
-                    f"Confidence: "
-                    f"{result.get('confidence', 'N/A')}\n\n"
-                    f"{'='*60}\n\n"
-                    f"{result['analysis']}\n\n"
-                    f"{'='*60}\n"
-                    f"Total Leased Comps: "
-                    f"{result.get('total_leased', 0)}\n"
-                    f"Total Active Comps: "
-                    f"{result.get('total_active', 0)}\n"
-                )
-                st.download_button(
-                    label="⬇️ Download Analysis Report",
-                    data=export_text,
-                    file_name=f"BRI_{addr.replace(' ', '_')}.txt",
-                    mime="text/plain",
-                    use_container_width=True,
-                )
-
-        if st.button(
-            "Start New Search",
+            "🔄 Start New Search",
             use_container_width=True,
             key="one_off_clear"
         ):
-            st.session_state["one_off_ready"] = False
-            st.session_state["one_off_subject"] = None
-            st.session_state["oo_done"] = False
-            st.session_state["oo_result"] = None
+            st.session_state["oo_ready"] = False
+            st.session_state["oo_subject"] = None
+            st.session_state["comps_ready_oneoff"] = False
+            st.session_state["comp_result_oneoff"] = None
+            st.session_state["report_ready_oneoff"] = False
+            st.session_state["report_result_oneoff"] = None
             st.rerun()
 
     st.markdown("---")
@@ -1069,10 +1006,13 @@ with main_tab2:
         if selected_recent != "-- Select --":
             if st.button("Re-Analyze This Property",
                          key="reanalyze_btn"):
-                st.session_state["one_off_subject"] = (
-                    recent_options[selected_recent]
-                )
-                st.session_state["one_off_ready"] = True
+                reanalyze = recent_options[selected_recent]
+                st.session_state["oo_subject"] = reanalyze
+                st.session_state["oo_ready"] = True
+                st.session_state["comps_ready_oneoff"] = False
+                st.session_state["comp_result_oneoff"] = None
+                st.session_state["report_ready_oneoff"] = False
+                st.session_state["report_result_oneoff"] = None
                 st.rerun()
     else:
         st.info(
