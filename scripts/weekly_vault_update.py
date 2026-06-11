@@ -721,7 +721,7 @@ def main():
 
     # Step 2: Wait
     success = wait_for_snapshot(
-        snapshot_id, max_checks=60, interval=60
+        snapshot_id, max_checks=115, interval=60
     )
     if not success:
         send_sms("BRI Timeout - Snapshot incomplete")
