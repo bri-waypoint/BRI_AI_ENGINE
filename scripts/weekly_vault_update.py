@@ -185,7 +185,7 @@ def check_snapshot_status(snapshot_id):
         log(f"   Status check error: {str(e)}")
         return 'unknown'
 
-def wait_for_snapshot(snapshot_id, max_checks=60, interval=60):
+def wait_for_snapshot(snapshot_id, max_checks=115, interval=60):
     """
     Poll snapshot status until ready.
     Waits 90 seconds after ready before returning
