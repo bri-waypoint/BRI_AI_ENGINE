@@ -194,9 +194,12 @@ def get_bri_opening_message(subject):
     based on the subject property details.
     """
     try:
-        client = anthropic.Anthropic(
-            api_key=os.getenv('ANTHROPIC_API_KEY')
+        api_key = (
+            os.getenv('ANTHROPIC_API_KEY') or
+            st.secrets.get('ANTHROPIC_API_KEY') or
+            st.secrets.get('CLAUDE_API_KEY')
         )
+        client = anthropic.Anthropic(api_key=api_key)
 
         beds = subject.get('bedrooms', '?')
         baths = subject.get('bathrooms', '?')
@@ -312,9 +315,12 @@ def render_bri_chat(subject, tab_key):
 
         # Get Claude response
         try:
-            client = anthropic.Anthropic(
-                api_key=os.getenv('ANTHROPIC_API_KEY')
+            api_key = (
+                os.getenv('ANTHROPIC_API_KEY') or
+                st.secrets.get('ANTHROPIC_API_KEY') or
+                st.secrets.get('CLAUDE_API_KEY')
             )
+            client = anthropic.Anthropic(api_key=api_key)
 
             beds = subject.get('bedrooms', '?')
             baths = subject.get('bathrooms', '?')
