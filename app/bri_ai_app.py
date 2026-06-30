@@ -5,6 +5,7 @@
 #          Bug fix: removed unreachable return in make_google_maps_url
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import os
 import sys
@@ -561,188 +562,287 @@ def build_selectable_comp_table(props, table_key,
 
 def build_selectable_comp_cards(props, table_key,
                                 price_label="Rent/Mo"):
-    """
-    Display comps as a photo card grid with Street View images.
-    3 cards per row, each with photo, details, Zillow link,
-    and checkbox to select for analysis.
-    Returns list of selected property dicts.
-    """
     if not props:
         return []
 
-    # Sort controls
-    sort_col = st.selectbox(
-        "Sort by:",
-        options=["Miles", "Date", "SqFt", "Beds", price_label],
-        key=f"sort_cards_{table_key}"
-    ) if len(props) > 1 else "Miles"
-
-    def sort_key(p):
-        if sort_col == "Miles":
-            return float(p.get("distance_miles") or 99)
-        elif sort_col == "Date":
-            return str(p.get("last_seen_date") or "")
-        elif sort_col == "SqFt":
-            return -(float(p.get("living_area") or 0))
-        elif sort_col == "Beds":
-            return -(float(p.get("bedrooms") or 0))
-        else:
-            return -(float(p.get("current_price") or 0))
-
-    # Always sort by miles first for numbering
-    # to match the map pins
-    sorted_props = sorted(
+    # Sort by miles for map number assignment
+    miles_sorted = sorted(
         enumerate(props),
         key=lambda x: float(
             x[1].get("distance_miles") or 99
         )
     )
-
-    # Apply display sort while preserving map numbers
     map_numbers = {
         orig_index: card_num
         for card_num, (orig_index, _)
-        in enumerate(sorted_props, start=1)
+        in enumerate(miles_sorted, start=1)
     }
 
-    if sort_col == "Date":
-        sorted_props = sorted(
-            enumerate(props),
-            key=lambda x: str(
-                x[1].get("last_seen_date") or ""
-            ),
-            reverse=True
+    # Build card HTML for each property
+    cards_html = ""
+    for orig_index, p in miles_sorted:
+        addr = str(p.get("address", "") or "")
+        city = str(p.get("city", "") or "")
+        beds = p.get("bedrooms", "?")
+        baths = p.get("bathrooms", "?")
+        sqft = int(p.get("living_area") or 0)
+        price = format_price(p.get("current_price"))
+        date = str(p.get("last_seen_date") or "")[:10]
+        miles = float(p.get("distance_miles") or 0)
+        zillow_url = make_zillow_url(addr, city, "ID") or "#"
+        map_num = map_numbers.get(orig_index, "?")
+        addr_short = addr[:28] + "..." if len(addr) > 28 else addr
+
+        photo_url = get_street_view_url(
+            addr, city, "ID", width=300, height=168
         )
-    elif sort_col != "Miles":
-        sorted_props = sorted(
-            enumerate(props),
-            key=lambda x: sort_key(x[1])
-        )
 
-    selected = []
+        if photo_url:
+            photo_html = (
+                f'<img src="{photo_url}" '
+                f'style="width:100%;height:168px;'
+                f'object-fit:cover;display:block;" '
+                f'onerror="this.style.display=\'none\';'
+                f'this.nextSibling.style.display=\'flex\';">'
+                f'<div style="display:none;height:168px;'
+                f'background:#f0f0f0;align-items:center;'
+                f'justify-content:center;color:#999;'
+                f'font-size:13px;">No photo</div>'
+            )
+        else:
+            photo_html = (
+                f'<div style="height:168px;'
+                f'background:#f0f0f0;display:flex;'
+                f'align-items:center;justify-content:center;'
+                f'color:#999;font-size:13px;">No photo</div>'
+            )
 
-    # Display in rows of 3 cards
-    rows = [
-        sorted_props[i:i+3]
-        for i in range(0, len(sorted_props), 3)
-    ]
+        cards_html += f"""
+        <div class="comp-card"
+             id="card_{table_key}_{orig_index}"
+             onclick="toggleCard('{table_key}_{orig_index}')"
+             style="
+                min-width:280px;max-width:280px;
+                border:2px solid #e0e0e0;
+                border-radius:10px;
+                overflow:hidden;
+                cursor:pointer;
+                background:white;
+                flex-shrink:0;
+                transition:border-color 0.2s,
+                box-shadow 0.2s;
+             ">
+            <div style="position:relative;">
+                {photo_html}
+                <div style="
+                    position:absolute;top:8px;left:8px;
+                    background:#1a73e8;color:white;
+                    border-radius:50%;width:28px;height:28px;
+                    display:flex;align-items:center;
+                    justify-content:center;
+                    font-weight:bold;font-size:12px;
+                    border:2px solid white;
+                    box-shadow:0 2px 4px rgba(0,0,0,0.3);
+                    font-family:Arial,sans-serif;
+                ">#{map_num}</div>
+            </div>
+            <div style="padding:10px;">
+                <div style="font-weight:bold;font-size:13px;
+                    margin-bottom:3px;color:#1a1a1a;">
+                    {addr_short}
+                </div>
+                <div style="color:#666;font-size:12px;
+                    margin-bottom:4px;">
+                    {city} · {miles:.2f} mi away
+                </div>
+                <div style="font-size:12px;
+                    margin-bottom:4px;color:#444;">
+                    🛏 {beds} bd · 🚿 {baths} ba ·
+                    📐 {sqft:,} sqft
+                </div>
+                <div style="font-weight:bold;color:#2d7a2d;
+                    font-size:14px;margin-bottom:4px;">
+                    💰 {price}/{price_label.split('/')[0]}
+                </div>
+                <div style="color:#888;font-size:11px;
+                    margin-bottom:6px;">📅 {date}</div>
+                <a href="{zillow_url}" target="_blank"
+                   onclick="event.stopPropagation()"
+                   style="font-size:11px;color:#1a73e8;
+                   text-decoration:none;">
+                   🏠 View on Zillow
+                </a>
+                <div class="selected-badge"
+                     id="badge_{table_key}_{orig_index}"
+                     style="display:none;margin-top:6px;
+                     background:#2d7a2d;color:white;
+                     text-align:center;padding:4px;
+                     border-radius:4px;font-size:12px;
+                     font-weight:bold;">
+                    ✓ Selected
+                </div>
+            </div>
+        </div>
+        """
 
-    for row in rows:
-        cols = st.columns(3)
-        for col, (orig_index, p) in zip(cols, row):
-            with col:
-                addr = str(p.get("address", "") or "")
-                city = str(p.get("city", "") or "")
-                beds = p.get("bedrooms", "?")
-                baths = p.get("bathrooms", "?")
-                sqft = int(p.get("living_area") or 0)
-                price = format_price(p.get("current_price"))
-                date = str(
-                    p.get("last_seen_date") or ""
-                )[:10]
-                miles = float(
-                    p.get("distance_miles") or 0
-                )
-                zillow_url = make_zillow_url(
-                    addr, city, "ID"
-                )
+    # Selected indices tracking
+    selected_key = f"carousel_selected_{table_key}"
+    if selected_key not in st.session_state:
+        st.session_state[selected_key] = []
 
-                # Map pin number badge + Street View photo
-                map_num = map_numbers.get(orig_index, "?")
+    carousel_html = f"""
+    <html>
+    <head>
+    <style>
+        body {{ margin:0;padding:0;
+            font-family:Arial,sans-serif; }}
+        .carousel-wrapper {{
+            position:relative;
+            width:100%;
+        }}
+        .carousel-container {{
+            display:flex;
+            overflow-x:auto;
+            gap:12px;
+            padding:10px 40px 10px 10px;
+            scroll-behavior:smooth;
+            -webkit-overflow-scrolling:touch;
+            scrollbar-width:thin;
+        }}
+        .carousel-container::-webkit-scrollbar {{
+            height:6px;
+        }}
+        .carousel-container::-webkit-scrollbar-thumb {{
+            background:#ccc;border-radius:3px;
+        }}
+        .scroll-btn {{
+            position:absolute;top:50%;
+            transform:translateY(-50%);
+            background:white;border:1px solid #ddd;
+            border-radius:50%;width:36px;height:36px;
+            display:flex;align-items:center;
+            justify-content:center;cursor:pointer;
+            font-size:18px;z-index:10;
+            box-shadow:0 2px 6px rgba(0,0,0,0.15);
+        }}
+        .scroll-btn:hover {{
+            background:#f5f5f5;
+        }}
+        .scroll-left {{ left:2px; }}
+        .scroll-right {{ right:2px; }}
+        .comp-card:hover {{
+            border-color:#1a73e8 !important;
+            box-shadow:0 4px 12px rgba(26,115,232,0.2);
+        }}
+        .comp-card.selected {{
+            border-color:#2d7a2d !important;
+            box-shadow:0 4px 12px rgba(45,122,45,0.2);
+        }}
+    </style>
+    </head>
+    <body>
+    <div class="carousel-wrapper">
+        <div class="scroll-btn scroll-left"
+             onclick="scrollLeft()">‹</div>
+        <div class="carousel-container"
+             id="carousel_{table_key}">
+            {cards_html}
+        </div>
+        <div class="scroll-btn scroll-right"
+             onclick="scrollRight()">›</div>
+    </div>
+    <div style="padding:6px 10px;color:#888;font-size:12px;">
+        {len(props)} properties ·
+        <span id="count_{table_key}">0</span> selected ·
+        Click cards to select for analysis
+    </div>
 
-                st.markdown(
-                    f"""<div style="position:relative;
-                        margin-bottom:4px;">
-                        <div style="
-                            position:absolute;
-                            top:6px;left:6px;
-                            background:#1a73e8;
-                            color:white;
-                            border-radius:50%;
-                            width:26px;height:26px;
-                            display:flex;
-                            align-items:center;
-                            justify-content:center;
-                            font-weight:bold;
-                            font-size:12px;
-                            border:2px solid white;
-                            box-shadow:0 2px 4px rgba(0,0,0,0.3);
-                            z-index:10;
-                            font-family:Arial,sans-serif;
-                        ">#{map_num}</div>
-                    </div>""",
-                    unsafe_allow_html=True
-                )
+    <script>
+        var selected = {{}};
+        var tableKey = "{table_key}";
 
-                photo_url = get_street_view_url(
-                    addr, city, "ID",
-                    width=400, height=168
-                )
-                if photo_url:
-                    st.image(
-                        photo_url,
-                        use_container_width=True
-                    )
-                else:
-                    st.markdown(
-                        "<div style='height:168px;"
-                        "background:#f0f0f0;"
-                        "display:flex;align-items:center;"
-                        "justify-content:center;"
-                        "border-radius:8px;"
-                        "color:#999'>No photo</div>",
-                        unsafe_allow_html=True
-                    )
+        function scrollLeft() {{
+            document.getElementById(
+                'carousel_' + tableKey
+            ).scrollBy({{left: -300, behavior: 'smooth'}});
+        }}
+        function scrollRight() {{
+            document.getElementById(
+                'carousel_' + tableKey
+            ).scrollBy({{left: 300, behavior: 'smooth'}});
+        }}
+        function toggleCard(cardId) {{
+            var card = document.getElementById(
+                'card_' + cardId
+            );
+            var badge = document.getElementById(
+                'badge_' + cardId
+            );
+            if (selected[cardId]) {{
+                delete selected[cardId];
+                card.classList.remove('selected');
+                badge.style.display = 'none';
+            }} else {{
+                selected[cardId] = true;
+                card.classList.add('selected');
+                badge.style.display = 'block';
+            }}
+            updateCount();
+        }}
+        function updateCount() {{
+            var count = Object.keys(selected).length;
+            document.getElementById(
+                'count_' + tableKey
+            ).textContent = count;
+        }}
+    </script>
+    </body>
+    </html>
+    """
 
-                # Property details
-                st.markdown(
-                    f"**{addr[:30]}**"
-                    f"{'...' if len(addr) > 30 else ''}"
-                )
-                st.markdown(
-                    f"{city} · "
-                    f"{miles:.2f} mi away"
-                )
-                st.markdown(
-                    f"🛏 {beds} bd · "
-                    f"🚿 {baths} ba · "
-                    f"📐 {sqft:,} sqft"
-                )
-                st.markdown(
-                    f"💰 **{price}/{price_label.split('/')[0]}**"
-                )
-                st.markdown(
-                    f"📅 {date}"
-                )
+    # Render the carousel
+    components.html(carousel_html, height=320,
+                    scrolling=False)
 
-                # Zillow link
-                if zillow_url:
-                    st.markdown(
-                        f'<a href="{zillow_url}" '
-                        f'target="_blank" '
-                        f'style="font-size:0.85em;">'
-                        f'🏠 View on Zillow</a>',
-                        unsafe_allow_html=True
-                    )
-
-                # Selection checkbox
-                checked = st.checkbox(
-                    "✓ Select this comp",
-                    key=f"card_{table_key}_{orig_index}",
-                    label_visibility="visible"
-                )
-                if checked:
-                    selected.append(p)
-
-                st.markdown("---")
-
-    # Summary
+    # Since we can't get JS selections back to Python,
+    # show a simple multiselect below as the
+    # official selection mechanism
+    st.markdown("**Confirm your comp selections:**")
     st.caption(
-        f"Showing {len(props)} properties · "
-        f"{len(selected)} selected"
+        "Click cards above to preview, then confirm "
+        "selections below for the analysis."
     )
 
-    return selected
+    options = []
+    option_map = {}
+    for orig_index, p in miles_sorted:
+        map_num = map_numbers.get(orig_index, "?")
+        addr = str(p.get("address", "") or "")
+        city = str(p.get("city", "") or "")
+        price = format_price(p.get("current_price"))
+        miles = float(p.get("distance_miles") or 0)
+        label = (
+            f"#{map_num} · {addr[:30]} · "
+            f"{city} · {price} · {miles:.2f}mi"
+        )
+        options.append(label)
+        option_map[label] = p
+
+    selected_labels = st.multiselect(
+        "Selected comps:",
+        options=options,
+        key=f"multiselect_{table_key}",
+        label_visibility="collapsed"
+    )
+
+    selected_props = [option_map[l] for l in selected_labels]
+
+    if selected_props:
+        st.success(
+            f"✓ {len(selected_props)} comp(s) selected"
+        )
+
+    return selected_props
 
 # ============================================================
 # LOAD DATA
