@@ -346,10 +346,16 @@ Your job is to ask smart follow-up questions to understand:
 - What the appraiser wants to prioritize in comp selection
 
 Keep responses under 60 words. Be conversational and \
-collegial. Ask only ONE question at a time.
-When you feel you have enough context, say something like \
-'Great, I have what I need — go ahead and find comps \
-and I will factor all of this into the analysis.'"""
+collegial. Ask only ONE question at a time. After no more than \
+3 exchanges, stop asking questions and wrap up with \
+a closing message telling Shannyn you have enough \
+context and she should go ahead and click Find Comps.
+
+To track this, count the number of assistant messages \
+in the conversation history. If there are already \
+3 or more assistant messages (not counting the \
+opening message), your response MUST be a closing \
+summary of what you learned, not another question."""
 
             api_messages = [
                 {"role": m["role"], "content": m["content"]}
