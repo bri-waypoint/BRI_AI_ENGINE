@@ -78,6 +78,22 @@ def format_sqft(val):
     except Exception:
         return "N/A"
 
+def normalize_home_type(value):
+    """Normalize property type values from different
+    sources into clean display labels."""
+    if not value:
+        return None
+    mapping = {
+        "SINGLE_FAMILY": "Single Family",
+        "TOWNHOUSE": "Townhouse",
+        "CONDO": "Condo",
+        "APARTMENT": "Apartment",
+        "Single Family": "Single Family",
+        "Townhouse": "Townhouse",
+        "Condo": "Condo",
+    }
+    return mapping.get(value.strip(), value.strip())
+
 def confidence_display(confidence, round_stopped, radius_used):
     """Show confidence badge with search details."""
     colors = {
@@ -387,6 +403,55 @@ def run_comp_selection_and_report(
         f"properties are found."
     )
 
+    # Property type checkboxes
+    st.markdown("**Select Property Type(s) to Search:**")
+    type_cols = st.columns(4)
+    with type_cols[0]:
+        type_sf = st.checkbox(
+            "🏠 Single Family",
+            value=False,
+            key=f"type_sf_{tab_key}"
+        )
+    with type_cols[1]:
+        type_th = st.checkbox(
+            "🏘️ Townhouse",
+            value=False,
+            key=f"type_th_{tab_key}"
+        )
+    with type_cols[2]:
+        type_co = st.checkbox(
+            "🏢 Condo",
+            value=False,
+            key=f"type_co_{tab_key}"
+        )
+    with type_cols[3]:
+        type_ap = st.checkbox(
+            "🏗️ Apartment",
+            value=False,
+            key=f"type_ap_{tab_key}"
+        )
+
+    selected_property_types = []
+    if type_sf:
+        selected_property_types.append("Single Family")
+    if type_th:
+        selected_property_types.append("Townhouse")
+    if type_co:
+        selected_property_types.append("Condo")
+    if type_ap:
+        selected_property_types.append("Apartment")
+
+    if not selected_property_types:
+        st.caption(
+            "💡 No type selected — all property types "
+            "will be included in search"
+        )
+    else:
+        st.caption(
+            f"Searching for: "
+            f"{', '.join(selected_property_types)}"
+        )
+
     if st.button(
         "🔍 Find Comps",
         type="primary",
@@ -399,7 +464,8 @@ def run_comp_selection_and_report(
             try:
                 comp_result = get_comparable_properties(
                     subject=subject,
-                    use_rentcast=use_rentcast
+                    use_rentcast=use_rentcast,
+                    property_types=selected_property_types
                 )
                 st.session_state[
                     f"comp_result_{tab_key}"

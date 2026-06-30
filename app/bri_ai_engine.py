@@ -42,8 +42,10 @@ def get_comparable_properties(subject, use_rentcast=True,
     Runs four-round appraisal comp search.
     Returns top 30 leased and top 30 active comps
     for Shannyn to review and select from.
-    radius_miles and property_types are ignored here —
-    the appraisal search manages its own radius expansion.
+    radius_miles is ignored — the appraisal search manages
+    its own radius expansion.
+    property_types: optional list of display names to filter
+    (e.g. ["Single Family", "Townhouse"]); None = all types.
     """
     print(f"BRI APPRAISAL COMP SEARCH")
     print(f"Property: {subject.get('address')}, "
@@ -51,7 +53,8 @@ def get_comparable_properties(subject, use_rentcast=True,
 
     result = run_comp_search(
         subject=subject,
-        use_rentcast=use_rentcast
+        use_rentcast=use_rentcast,
+        property_types=property_types
     )
 
     return result

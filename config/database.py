@@ -222,7 +222,8 @@ def passes_similarity(prop, subject_beds, subject_baths,
 # ============================================================
 
 def fetch_vault_properties(lat, lon, radius_miles,
-                           months_back, exclude_address=None):
+                           months_back, exclude_address=None,
+                           property_types=None):
     """
     Fetch all matching vault properties within radius and date window.
     Returns leased and active separately.
@@ -244,6 +245,23 @@ def fetch_vault_properties(lat, lon, radius_miles,
             f" AND LOWER(TRIM(address)) != "
             f"LOWER(TRIM('{clean}'))"
         )
+
+    # Build property type clause for vault (BrightData home_type values)
+    vault_type_clause = ""
+    if property_types:
+        vault_variants = []
+        for pt in property_types:
+            if pt == "Single Family":
+                vault_variants.extend(SINGLE_FAMILY_TYPES)
+            elif pt == "Townhouse":
+                vault_variants.extend(TOWNHOUSE_TYPES)
+            elif pt == "Condo":
+                vault_variants.extend(CONDO_TYPES)
+            elif pt == "Apartment":
+                vault_variants.extend(EXCLUDED_TYPES)
+        if vault_variants:
+            vt_list = "', '".join(vault_variants)
+            vault_type_clause = f" AND home_type IN ('{vt_list}')"
 
     # Base select - all residential, excludes apartments
     type_list = "', '".join(ALL_RESIDENTIAL_TYPES)
@@ -276,6 +294,7 @@ def fetch_vault_properties(lat, lon, radius_miles,
             AND CAST(longitude AS FLOAT) BETWEEN %s AND %s
             AND home_type IN ('{type_list}')
             {exclude_clause}
+            {vault_type_clause}
     """
 
     params = (
@@ -344,7 +363,8 @@ def fetch_vault_properties(lat, lon, radius_miles,
 
     return result_leased, result_active
 
-def fetch_rentcast_properties(lat, lon, radius_miles, months_back):
+def fetch_rentcast_properties(lat, lon, radius_miles, months_back,
+                              property_types=None):
     """
     Fetch all matching rentcast properties within radius and date window.
     Returns leased and active separately.
@@ -358,7 +378,18 @@ def fetch_rentcast_properties(lat, lon, radius_miles, months_back):
         datetime.now() - timedelta(days=months_back * 30.5)
     ).strftime('%Y-%m-%d')
 
-    base = """
+    # Build property type clause for RentCast (property_type field values)
+    rc_type_clause = ""
+    if property_types:
+        rc_types = [
+            pt for pt in property_types
+            if pt in ('Single Family', 'Townhouse', 'Condo')
+        ]
+        if rc_types:
+            rc_list = "', '".join(rc_types)
+            rc_type_clause = f" AND property_type IN ('{rc_list}')"
+
+    base = f"""
         SELECT
             id,
             formatted_address as address,
@@ -388,6 +419,7 @@ def fetch_rentcast_properties(lat, lon, radius_miles, months_back):
             AND CAST(latitude AS FLOAT) BETWEEN %s AND %s
             AND CAST(longitude AS FLOAT) BETWEEN %s AND %s
             AND property_type NOT IN ('Multi-Family', 'Apartment')
+            {rc_type_clause}
     """
 
     params = (
@@ -459,7 +491,7 @@ def fetch_rentcast_properties(lat, lon, radius_miles, months_back):
 # FOUR-ROUND APPRAISAL COMP SEARCH
 # ============================================================
 
-def run_comp_search(subject, use_rentcast=True):
+def run_comp_search(subject, use_rentcast=True, property_types=None):
     """
     Four-round appraisal-method comp search.
 
@@ -545,7 +577,8 @@ def run_comp_search(subject, use_rentcast=True):
             lon=float(subject['longitude']),
             radius_miles=r['radius'],
             months_back=r['months'],
-            exclude_address=exclude_address
+            exclude_address=exclude_address,
+            property_types=property_types
         )
 
         # Fetch from rentcast
@@ -555,7 +588,8 @@ def run_comp_search(subject, use_rentcast=True):
                 lat=float(subject['latitude']),
                 lon=float(subject['longitude']),
                 radius_miles=r['radius'],
-                months_back=r['months']
+                months_back=r['months'],
+                property_types=property_types
             )
 
         # Combine sources
