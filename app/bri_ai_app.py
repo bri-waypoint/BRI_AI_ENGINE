@@ -95,6 +95,28 @@ def normalize_home_type(value):
     }
     return mapping.get(value.strip(), value.strip())
 
+def get_street_view_url(address, city, state, width=400, height=250):
+    """Build a Google Street View Static API URL for a property."""
+    try:
+        api_key = (
+            os.getenv('GOOGLE_STREET_VIEW_KEY') or
+            st.secrets.get('GOOGLE_STREET_VIEW_KEY')
+        )
+        if not api_key:
+            return None
+        location = urllib.parse.quote(
+            f"{address}, {city}, {state}"
+        )
+        return (
+            f"https://maps.googleapis.com/maps/api/streetview"
+            f"?size={width}x{height}"
+            f"&location={location}"
+            f"&key={api_key}"
+            f"&return_error_code=true"
+        )
+    except Exception:
+        return None
+
 def confidence_display(confidence, round_stopped, radius_used):
     """Show confidence badge with search details."""
     colors = {
@@ -516,6 +538,148 @@ def build_selectable_comp_table(props, table_key,
     )
     return selected
 
+def build_selectable_comp_cards(props, table_key,
+                                price_label="Rent/Mo"):
+    """
+    Display comps as a photo card grid with Street View images.
+    3 cards per row, each with photo, details, Zillow link,
+    and checkbox to select for analysis.
+    Returns list of selected property dicts.
+    """
+    if not props:
+        return []
+
+    # Sort controls
+    sort_col = st.selectbox(
+        "Sort by:",
+        options=["Miles", "Date", "SqFt", "Beds", price_label],
+        key=f"sort_cards_{table_key}"
+    ) if len(props) > 1 else "Miles"
+
+    def sort_key(p):
+        if sort_col == "Miles":
+            return float(p.get("distance_miles") or 99)
+        elif sort_col == "Date":
+            return str(p.get("last_seen_date") or "")
+        elif sort_col == "SqFt":
+            return -(float(p.get("living_area") or 0))
+        elif sort_col == "Beds":
+            return -(float(p.get("bedrooms") or 0))
+        else:
+            return -(float(p.get("current_price") or 0))
+
+    if sort_col == "Date":
+        sorted_props = sorted(
+            enumerate(props),
+            key=lambda x: str(
+                x[1].get("last_seen_date") or ""
+            ),
+            reverse=True
+        )
+    else:
+        sorted_props = sorted(
+            enumerate(props),
+            key=lambda x: sort_key(x[1])
+        )
+
+    selected = []
+
+    # Display in rows of 3 cards
+    rows = [
+        sorted_props[i:i+3]
+        for i in range(0, len(sorted_props), 3)
+    ]
+
+    for row in rows:
+        cols = st.columns(3)
+        for col, (orig_index, p) in zip(cols, row):
+            with col:
+                addr = str(p.get("address", "") or "")
+                city = str(p.get("city", "") or "")
+                beds = p.get("bedrooms", "?")
+                baths = p.get("bathrooms", "?")
+                sqft = int(p.get("living_area") or 0)
+                price = format_price(p.get("current_price"))
+                date = str(
+                    p.get("last_seen_date") or ""
+                )[:10]
+                miles = float(
+                    p.get("distance_miles") or 0
+                )
+                zillow_url = make_zillow_url(
+                    addr, city, "ID"
+                )
+
+                # Street View photo
+                photo_url = get_street_view_url(
+                    addr, city, "ID"
+                )
+                if photo_url:
+                    st.image(
+                        photo_url,
+                        use_container_width=True
+                    )
+                else:
+                    st.markdown(
+                        "<div style='height:150px;"
+                        "background:#f0f0f0;"
+                        "display:flex;align-items:center;"
+                        "justify-content:center;"
+                        "border-radius:8px;"
+                        "color:#999'>No photo</div>",
+                        unsafe_allow_html=True
+                    )
+
+                # Property details
+                st.markdown(
+                    f"**{addr[:30]}**"
+                    f"{'...' if len(addr) > 30 else ''}"
+                )
+                st.markdown(
+                    f"{city} · "
+                    f"{miles:.2f} mi away"
+                )
+                st.markdown(
+                    f"🛏 {beds} bd · "
+                    f"🚿 {baths} ba · "
+                    f"📐 {sqft:,} sqft"
+                )
+                st.markdown(
+                    f"💰 **{price}/{price_label.split('/')[0]}**"
+                )
+                st.markdown(
+                    f"📅 {date}"
+                )
+
+                # Zillow link
+                if zillow_url:
+                    st.markdown(
+                        f'<a href="{zillow_url}" '
+                        f'target="_blank" '
+                        f'style="font-size:0.85em;">'
+                        f'🏠 View on Zillow</a>',
+                        unsafe_allow_html=True
+                    )
+
+                # Selection checkbox
+                checked = st.checkbox(
+                    "✓ Select this comp",
+                    key=f"card_{table_key}_{orig_index}",
+                    label_visibility="visible"
+                )
+                if checked:
+                    selected.append(p)
+
+                st.markdown("---")
+
+    # Summary
+    st.caption(
+        f"Showing {len(props)} properties · "
+        f"{len(selected)} selected"
+    )
+
+    return selected
+
 # ============================================================
 # LOAD DATA
 # ============================================================
@@ -764,11 +928,10 @@ def run_comp_selection_and_report(
                     selected_comps=pre_selected_leased,
                     map_key=f"folium_leased_{tab_key}"
                 )
-                selected_leased = build_selectable_comp_table(
+                selected_leased = build_selectable_comp_cards(
                     leased_comps,
                     table_key=f"leased_{tab_key}",
-                    price_label="Leased/Mo",
-                    map_key=f"map_leased_{tab_key}"
+                    price_label="Leased/Mo"
                 )
                 if selected_leased:
                     st.success(
@@ -799,11 +962,10 @@ def run_comp_selection_and_report(
                     selected_comps=pre_selected_active,
                     map_key=f"folium_active_{tab_key}"
                 )
-                selected_active = build_selectable_comp_table(
+                selected_active = build_selectable_comp_cards(
                     active_comps,
                     table_key=f"active_{tab_key}",
-                    price_label="Asking/Mo",
-                    map_key=f"map_active_{tab_key}"
+                    price_label="Asking/Mo"
                 )
                 if selected_active:
                     st.success(
