@@ -153,7 +153,7 @@ def render_comp_map(subject, comps, selected_comps, map_key):
             f"<b>#{i} {p.get('address','')}</b><br>"
             f"{p.get('city','')}<br>"
             f"{p.get('bedrooms','')}bd / {p.get('bathrooms','')}ba | "
-            f"{int(p.get('living_area',0)):,} sqft<br>"
+            f"{int(p.get('living_area') or 0):,} sqft<br>"
             f"Rent: {price}<br>"
             f"Distance: {dist}"
         )
@@ -463,19 +463,24 @@ def run_comp_selection_and_report(
                 st.error("No leased comps found.")
                 selected_leased = []
             else:
-                selected_leased = build_selectable_comp_table(
-                    leased_comps,
-                    table_key=f"leased_{tab_key}",
-                    price_label="Leased/Mo",
-                    map_key=f"map_leased_{tab_key}"
-                )
+                pre_selected_leased = [
+                    p for i, p in enumerate(leased_comps)
+                    if st.session_state.get(
+                        f"cb_leased_{tab_key}_{i}", False)
+                ]
                 st.markdown("#### 🗺️ Comp Map")
                 st.caption("🔴 Subject  |  🔵 Available comp  |  🟢 Selected comp — click any pin for details")
                 render_comp_map(
                     subject=subject,
                     comps=leased_comps,
-                    selected_comps=selected_leased,
+                    selected_comps=pre_selected_leased,
                     map_key=f"folium_leased_{tab_key}"
+                )
+                selected_leased = build_selectable_comp_table(
+                    leased_comps,
+                    table_key=f"leased_{tab_key}",
+                    price_label="Leased/Mo",
+                    map_key=f"map_leased_{tab_key}"
                 )
                 if selected_leased:
                     st.success(
@@ -493,19 +498,24 @@ def run_comp_selection_and_report(
                 )
                 selected_active = []
             else:
-                selected_active = build_selectable_comp_table(
-                    active_comps,
-                    table_key=f"active_{tab_key}",
-                    price_label="Asking/Mo",
-                    map_key=f"map_active_{tab_key}"
-                )
+                pre_selected_active = [
+                    p for i, p in enumerate(active_comps)
+                    if st.session_state.get(
+                        f"cb_active_{tab_key}_{i}", False)
+                ]
                 st.markdown("#### 🗺️ Comp Map")
                 st.caption("🔴 Subject  |  🔵 Available comp  |  🟢 Selected comp — click any pin for details")
                 render_comp_map(
                     subject=subject,
                     comps=active_comps,
-                    selected_comps=selected_active,
+                    selected_comps=pre_selected_active,
                     map_key=f"folium_active_{tab_key}"
+                )
+                selected_active = build_selectable_comp_table(
+                    active_comps,
+                    table_key=f"active_{tab_key}",
+                    price_label="Asking/Mo",
+                    map_key=f"map_active_{tab_key}"
                 )
                 if selected_active:
                     st.success(
