@@ -184,23 +184,44 @@ def render_comp_map(subject, comps, selected_comps, map_key):
 
     # Comp markers - green if selected, blue if not
     for i, p in enumerate(mappable, start=1):
-        is_selected = p.get("address", "") in selected_addresses
-        color = "green" if is_selected else "blue"
         price = f"${int(p.get('current_price',0)):,}/mo" if p.get("current_price") else "N/A"
         dist = f"{float(p.get('distance_miles',0)):.2f} mi"
         popup_html = (
             f"<b>#{i} {p.get('address','')}</b><br>"
             f"{p.get('city','')}<br>"
-            f"{p.get('bedrooms','')}bd / {p.get('bathrooms','')}ba | "
+            f"{p.get('bedrooms','')}bd / "
+            f"{p.get('bathrooms','')}ba | "
             f"{int(p.get('living_area') or 0):,} sqft<br>"
             f"Rent: {price}<br>"
             f"Distance: {dist}"
         )
+        # Numbered circle icon matching Zillow style
+        div_icon = folium.DivIcon(
+            html=f"""
+                <div style="
+                    background-color: #1a73e8;
+                    color: white;
+                    border-radius: 50%;
+                    width: 28px;
+                    height: 28px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-weight: bold;
+                    font-size: 12px;
+                    border: 2px solid white;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                    font-family: Arial, sans-serif;
+                ">{i}</div>
+            """,
+            icon_size=(28, 28),
+            icon_anchor=(14, 14)
+        )
         folium.Marker(
             location=[p["latitude"], p["longitude"]],
             popup=folium.Popup(popup_html, max_width=220),
-            tooltip=f"#{i} {p.get('address','')[:30]}",
-            icon=folium.Icon(color=color, icon="circle", prefix="fa")
+            tooltip=f"#{i} {p.get('address','')[:40]}",
+            icon=div_icon
         ).add_to(m)
 
     st_folium(m, width=None, height=420, key=map_key, returned_objects=[])
@@ -568,6 +589,22 @@ def build_selectable_comp_cards(props, table_key,
         else:
             return -(float(p.get("current_price") or 0))
 
+    # Always sort by miles first for numbering
+    # to match the map pins
+    sorted_props = sorted(
+        enumerate(props),
+        key=lambda x: float(
+            x[1].get("distance_miles") or 99
+        )
+    )
+
+    # Apply display sort while preserving map numbers
+    map_numbers = {
+        orig_index: card_num
+        for card_num, (orig_index, _)
+        in enumerate(sorted_props, start=1)
+    }
+
     if sort_col == "Date":
         sorted_props = sorted(
             enumerate(props),
@@ -576,7 +613,7 @@ def build_selectable_comp_cards(props, table_key,
             ),
             reverse=True
         )
-    else:
+    elif sort_col != "Miles":
         sorted_props = sorted(
             enumerate(props),
             key=lambda x: sort_key(x[1])
@@ -610,9 +647,36 @@ def build_selectable_comp_cards(props, table_key,
                     addr, city, "ID"
                 )
 
-                # Street View photo
+                # Map pin number badge + Street View photo
+                map_num = map_numbers.get(orig_index, "?")
+
+                st.markdown(
+                    f"""<div style="position:relative;
+                        margin-bottom:4px;">
+                        <div style="
+                            position:absolute;
+                            top:6px;left:6px;
+                            background:#1a73e8;
+                            color:white;
+                            border-radius:50%;
+                            width:26px;height:26px;
+                            display:flex;
+                            align-items:center;
+                            justify-content:center;
+                            font-weight:bold;
+                            font-size:12px;
+                            border:2px solid white;
+                            box-shadow:0 2px 4px rgba(0,0,0,0.3);
+                            z-index:10;
+                            font-family:Arial,sans-serif;
+                        ">#{map_num}</div>
+                    </div>""",
+                    unsafe_allow_html=True
+                )
+
                 photo_url = get_street_view_url(
-                    addr, city, "ID"
+                    addr, city, "ID",
+                    width=400, height=168
                 )
                 if photo_url:
                     st.image(
@@ -621,7 +685,7 @@ def build_selectable_comp_cards(props, table_key,
                     )
                 else:
                     st.markdown(
-                        "<div style='height:150px;"
+                        "<div style='height:168px;"
                         "background:#f0f0f0;"
                         "display:flex;align-items:center;"
                         "justify-content:center;"
