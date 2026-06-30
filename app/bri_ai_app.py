@@ -743,13 +743,13 @@ def build_selectable_comp_cards(props, table_key,
     <body>
     <div class="carousel-wrapper">
         <div class="scroll-btn scroll-left"
-             onclick="scrollLeft()">‹</div>
+             onclick="scrollCarouselLeft()">‹</div>
         <div class="carousel-container"
              id="carousel_{table_key}">
             {cards_html}
         </div>
         <div class="scroll-btn scroll-right"
-             onclick="scrollRight()">›</div>
+             onclick="scrollCarouselRight()">›</div>
     </div>
     <div style="padding:6px 10px;color:#888;font-size:12px;">
         {len(props)} properties ·
@@ -761,12 +761,12 @@ def build_selectable_comp_cards(props, table_key,
         var selected = {{}};
         var tableKey = "{table_key}";
 
-        function scrollLeft() {{
+        function scrollCarouselLeft() {{
             document.getElementById(
                 'carousel_' + tableKey
             ).scrollBy({{left: -300, behavior: 'smooth'}});
         }}
-        function scrollRight() {{
+        function scrollCarouselRight() {{
             document.getElementById(
                 'carousel_' + tableKey
             ).scrollBy({{left: 300, behavior: 'smooth'}});
