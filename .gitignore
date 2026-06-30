@@ -1,6 +1,7 @@
 # Never commit these!
 .env
 .streamlit/secrets.toml
+secrets.toml
 venv/
 __pycache__/
 *.pyc
@@ -9,3 +10,6 @@ data/rentcast_cache/
 logs/
 *.log
 data/*.db
+*.txt
+*.key
+*.pem
