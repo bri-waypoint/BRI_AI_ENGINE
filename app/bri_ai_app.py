@@ -807,10 +807,12 @@ def build_selectable_comp_cards(props, table_key,
     # Since we can't get JS selections back to Python,
     # show a simple multiselect below as the
     # official selection mechanism
-    st.markdown("**Confirm your comp selections:**")
+    st.markdown(
+        "**Step 2 — Select comps for analysis:**"
+    )
     st.caption(
-        "Click cards above to preview, then confirm "
-        "selections below for the analysis."
+        "👆 Browse cards above · "
+        "✅ Choose matching numbers below"
     )
 
     options = []
