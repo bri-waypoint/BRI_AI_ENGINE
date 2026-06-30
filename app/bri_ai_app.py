@@ -10,6 +10,8 @@ import os
 import sys
 import urllib.parse
 from datetime import datetime
+import folium
+from streamlit_folium import st_folium
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
@@ -99,8 +101,74 @@ def confidence_display(confidence, round_stopped, radius_used):
     msg = messages.get(confidence, f'Round {round_stopped}')
     return f"{icon} {msg}"
 
+def render_comp_map(subject, comps, selected_comps, map_key):
+    """
+    Render an interactive folium map showing:
+    - Red star marker for the subject property
+    - Numbered blue markers for all comp candidates
+    - Numbered green markers for selected comps
+    Popups show address, price, beds/baths, distance.
+    """
+    sub_lat = subject.get("latitude")
+    sub_lon = subject.get("longitude")
+    if not sub_lat or not sub_lon:
+        st.warning("Subject property coordinates not available for map.")
+        return
+
+    # Filter comps that have coordinates
+    mappable = [p for p in comps if p.get("latitude") and p.get("longitude")]
+    if not mappable:
+        st.info("No coordinate data available for map display.")
+        return
+
+    selected_addresses = {p.get("address", "") for p in selected_comps}
+
+    # Build map centered on subject
+    m = folium.Map(
+        location=[sub_lat, sub_lon],
+        zoom_start=13,
+        tiles="OpenStreetMap"
+    )
+
+    # Subject property - red star
+    folium.Marker(
+        location=[sub_lat, sub_lon],
+        popup=folium.Popup(
+            f"<b>SUBJECT</b><br>{subject.get('address', '')}<br>"
+            f"{subject.get('bedrooms','')}bd / {subject.get('bathrooms','')}ba<br>"
+            f"{int(subject.get('living_area',0)):,} sqft",
+            max_width=200
+        ),
+        tooltip="📍 Subject Property",
+        icon=folium.Icon(color="red", icon="home", prefix="fa")
+    ).add_to(m)
+
+    # Comp markers - green if selected, blue if not
+    for i, p in enumerate(mappable, start=1):
+        is_selected = p.get("address", "") in selected_addresses
+        color = "green" if is_selected else "blue"
+        price = f"${int(p.get('current_price',0)):,}/mo" if p.get("current_price") else "N/A"
+        dist = f"{float(p.get('distance_miles',0)):.2f} mi"
+        popup_html = (
+            f"<b>#{i} {p.get('address','')}</b><br>"
+            f"{p.get('city','')}<br>"
+            f"{p.get('bedrooms','')}bd / {p.get('bathrooms','')}ba | "
+            f"{int(p.get('living_area',0)):,} sqft<br>"
+            f"Rent: {price}<br>"
+            f"Distance: {dist}"
+        )
+        folium.Marker(
+            location=[p["latitude"], p["longitude"]],
+            popup=folium.Popup(popup_html, max_width=220),
+            tooltip=f"#{i} {p.get('address','')[:30]}",
+            icon=folium.Icon(color=color, icon="circle", prefix="fa")
+        ).add_to(m)
+
+    st_folium(m, width=None, height=420, key=map_key, returned_objects=[])
+
+
 def build_selectable_comp_table(props, table_key,
-                                price_label="Rent/Mo"):
+                                price_label="Rent/Mo", map_key=None):
     """
     Display a sortable selectable comp table.
     Each row uses st.columns so checkbox and Zillow link
@@ -398,7 +466,16 @@ def run_comp_selection_and_report(
                 selected_leased = build_selectable_comp_table(
                     leased_comps,
                     table_key=f"leased_{tab_key}",
-                    price_label="Leased/Mo"
+                    price_label="Leased/Mo",
+                    map_key=f"map_leased_{tab_key}"
+                )
+                st.markdown("#### 🗺️ Comp Map")
+                st.caption("🔴 Subject  |  🔵 Available comp  |  🟢 Selected comp — click any pin for details")
+                render_comp_map(
+                    subject=subject,
+                    comps=leased_comps,
+                    selected_comps=selected_leased,
+                    map_key=f"folium_leased_{tab_key}"
                 )
                 if selected_leased:
                     st.success(
@@ -419,7 +496,16 @@ def run_comp_selection_and_report(
                 selected_active = build_selectable_comp_table(
                     active_comps,
                     table_key=f"active_{tab_key}",
-                    price_label="Asking/Mo"
+                    price_label="Asking/Mo",
+                    map_key=f"map_active_{tab_key}"
+                )
+                st.markdown("#### 🗺️ Comp Map")
+                st.caption("🔴 Subject  |  🔵 Available comp  |  🟢 Selected comp — click any pin for details")
+                render_comp_map(
+                    subject=subject,
+                    comps=active_comps,
+                    selected_comps=selected_active,
+                    map_key=f"folium_active_{tab_key}"
                 )
                 if selected_active:
                     st.success(
