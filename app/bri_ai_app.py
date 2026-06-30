@@ -364,11 +364,11 @@ and I will factor all of this into the analysis.'"""
             })
 
         except Exception as e:
+            print(f"BRI CHAT ERROR: {type(e).__name__}: {str(e)}")
             chat_history.append({
                 "role": "assistant",
                 "content": (
-                    "Thanks for that context — I'll factor "
-                    "it into the comp search and analysis."
+                    f"Chat error: {type(e).__name__}: {str(e)[:100]}"
                 )
             })
 
