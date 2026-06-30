@@ -12,6 +12,7 @@ import urllib.parse
 from datetime import datetime
 import folium
 from streamlit_folium import st_folium
+import anthropic
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 root_dir = os.path.dirname(current_dir)
@@ -181,6 +182,211 @@ def render_comp_map(subject, comps, selected_comps, map_key):
         ).add_to(m)
 
     st_folium(m, width=None, height=420, key=map_key, returned_objects=[])
+
+
+# ============================================================
+# BRI CHAT - Pre-search property briefing
+# ============================================================
+
+def get_bri_opening_message(subject):
+    """
+    Generate an intelligent opening message from BRI
+    based on the subject property details.
+    """
+    try:
+        client = anthropic.Anthropic(
+            api_key=os.getenv('ANTHROPIC_API_KEY')
+        )
+
+        beds = subject.get('bedrooms', '?')
+        baths = subject.get('bathrooms', '?')
+        sqft = int(subject.get('living_area', 0)) if subject.get('living_area') else 0
+        rent = subject.get('current_rent')
+        address = subject.get('address', '')
+        city = subject.get('city', '')
+        notes = subject.get('notes', '')
+
+        rent_str = f"${int(rent):,}/mo" if rent else "rent not set"
+        sqft_str = f"{sqft:,} sqft" if sqft else "sqft unknown"
+        notes_str = f"\nExisting notes: {notes}" if notes else ""
+
+        prompt = f"""You are BRI, an expert rental market analyst \
+assistant for a property management company in Boise, Idaho. \
+You are about to help find comparable rental properties.
+
+Property details:
+- Address: {address}, {city}
+- Bedrooms: {beds} | Bathrooms: {baths}
+- Size: {sqft_str}
+- Current rent: {rent_str}{notes_str}
+
+Generate a warm, professional opening message (2-3 sentences max) that:
+1. Acknowledges the specific property by address
+2. Briefly confirms the key details you know
+3. Asks ONE smart opening question to understand \
+   what makes this property unique or what the \
+   appraiser wants to focus on
+
+Be conversational, not robotic. You are a knowledgeable \
+colleague, not a form. Do not use bullet points.
+Keep it under 60 words."""
+
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return message.content[0].text
+
+    except Exception as e:
+        beds = subject.get('bedrooms', '?')
+        baths = subject.get('bathrooms', '?')
+        address = subject.get('address', '')
+        return (
+            f"I'm ready to help analyze {address}. "
+            f"This is a {beds}bd/{baths}ba property. "
+            f"What should I know about it before I search for comps?"
+        )
+
+
+def render_bri_chat(subject, tab_key):
+    """
+    Render the BRI pre-search chat window.
+    Returns the full conversation as a formatted string
+    for use in the analysis prompt.
+    """
+    chat_key = f"bri_chat_{tab_key}"
+    opened_key = f"bri_chat_opened_{tab_key}"
+    last_prop_key = f"bri_chat_last_prop_{tab_key}"
+
+    current_address = subject.get('address', '')
+
+    # Auto-open and generate opening message when
+    # property changes or chat hasn't started yet
+    if (not st.session_state.get(opened_key) or
+            st.session_state.get(last_prop_key) != current_address):
+
+        st.session_state[last_prop_key] = current_address
+        st.session_state[opened_key] = True
+
+        # Generate opening message from Claude
+        with st.spinner("BRI is reviewing the property..."):
+            opening = get_bri_opening_message(subject)
+
+        # Initialize chat with opening message
+        st.session_state[chat_key] = [
+            {"role": "assistant", "content": opening}
+        ]
+
+    st.markdown("### 💬 Brief BRI Before You Search")
+    st.caption(
+        "Tell BRI what makes this property unique. "
+        "Your expertise helps Claude find better comps."
+    )
+
+    # Display chat history
+    chat_history = st.session_state.get(chat_key, [])
+
+    chat_container = st.container()
+    with chat_container:
+        for msg in chat_history:
+            if msg["role"] == "assistant":
+                with st.chat_message("assistant", avatar="🏠"):
+                    st.markdown(msg["content"])
+            else:
+                with st.chat_message("user", avatar="👤"):
+                    st.markdown(msg["content"])
+
+    # Chat input
+    user_input = st.chat_input(
+        "Tell BRI about this property...",
+        key=f"chat_input_{tab_key}"
+    )
+
+    if user_input:
+        # Add user message to history
+        chat_history.append({
+            "role": "user",
+            "content": user_input
+        })
+
+        # Get Claude response
+        try:
+            client = anthropic.Anthropic(
+                api_key=os.getenv('ANTHROPIC_API_KEY')
+            )
+
+            beds = subject.get('bedrooms', '?')
+            baths = subject.get('bathrooms', '?')
+            sqft = int(subject.get('living_area', 0)) if subject.get('living_area') else 0
+            rent = subject.get('current_rent')
+            rent_str = f"${int(rent):,}/mo" if rent else "rent not set"
+
+            system_prompt = f"""You are BRI, an expert rental \
+market analyst for a property management company in Boise, Idaho.
+
+You are gathering information about this property before \
+searching for comparable rentals:
+- Address: {subject.get('address', '')}, {subject.get('city', '')}
+- Bedrooms: {beds} | Bathrooms: {baths}
+- Size: {sqft:,} sqft
+- Current rent: {rent_str}
+
+Your job is to ask smart follow-up questions to understand:
+- What makes this property unique
+- What tenant profile it attracts
+- Any features that affect rent (parking, garage, \
+  updates, views, HOA, pet policy, location factors)
+- What the appraiser wants to prioritize in comp selection
+
+Keep responses under 60 words. Be conversational and \
+collegial. Ask only ONE question at a time.
+When you feel you have enough context, say something like \
+'Great, I have what I need — go ahead and find comps \
+and I will factor all of this into the analysis.'"""
+
+            api_messages = [
+                {"role": m["role"], "content": m["content"]}
+                for m in chat_history
+            ]
+
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=150,
+                system=system_prompt,
+                messages=api_messages
+            )
+
+            assistant_reply = response.content[0].text
+            chat_history.append({
+                "role": "assistant",
+                "content": assistant_reply
+            })
+
+        except Exception as e:
+            chat_history.append({
+                "role": "assistant",
+                "content": (
+                    "Thanks for that context — I'll factor "
+                    "it into the comp search and analysis."
+                )
+            })
+
+        st.session_state[chat_key] = chat_history
+        st.rerun()
+
+    # Return conversation as formatted string
+    # for use in the analysis prompt
+    if len(chat_history) > 1:
+        conversation_text = "\n\nAPPRAISER PRE-SEARCH BRIEFING:\n"
+        conversation_text += "=" * 40 + "\n"
+        for msg in chat_history:
+            role = "BRI" if msg["role"] == "assistant" else "Appraiser"
+            conversation_text += f"{role}: {msg['content']}\n\n"
+        conversation_text += "=" * 40
+        return conversation_text
+
+    return ""
 
 
 def build_selectable_comp_table(props, table_key,
@@ -391,6 +597,10 @@ def run_comp_selection_and_report(
     tab_key keeps session state separate between tabs.
     save_report=True saves to database (portfolio only).
     """
+    # BRI Pre-search chat
+    chat_context = render_bri_chat(subject, tab_key)
+
+    st.markdown("---")
     # --------------------------------------------------------
     # STEP 1: FIND COMPS
     # --------------------------------------------------------
@@ -635,7 +845,8 @@ def run_comp_selection_and_report(
                     result = generate_report(
                         subject=subject_with_notes,
                         selected_leased=selected_leased,
-                        selected_active=selected_active
+                        selected_active=selected_active,
+                        chat_context=chat_context
                     )
                     result["radius_used"] = radius_used
                     result["confidence"] = confidence

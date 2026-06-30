@@ -59,7 +59,8 @@ def get_comparable_properties(subject, use_rentcast=True,
 
     return result
 
-def generate_report(subject, selected_leased, selected_active):
+def generate_report(subject, selected_leased, selected_active,
+                    chat_context=""):
     """
     STEP 2 of two-step workflow.
     Takes Shannyn's selected comps and generates
@@ -106,6 +107,9 @@ def generate_report(subject, selected_leased, selected_active):
         rentcast_data=rentcast_data,
         current_date=current_date
     )
+    if chat_context:
+        prompt += f"\n{chat_context}"
+
     print(f"   Prompt: {len(prompt):,} characters")
 
     print("[2] Sending to Claude AI...")
