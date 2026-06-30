@@ -7,6 +7,8 @@ import os
 import sys
 import requests
 import psycopg2
+import smtplib
+from email.mime.text import MIMEText
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -50,6 +52,30 @@ SUPABASE_CONFIG = {
     'sslmode': 'require',
     'connect_timeout': 30
 }
+
+# ============================================================
+# SMS NOTIFICATION
+# ============================================================
+
+def send_sms(message):
+    """Send SMS via Gmail to Verizon number."""
+    try:
+        gmail_password = os.getenv('GMAIL_APP_PASSWORD')
+        if not gmail_password:
+            print(f"SMS skipped - no GMAIL_APP_PASSWORD")
+            return False
+        msg = MIMEText(message)
+        msg['From'] = 'markflory1@gmail.com'
+        msg['To'] = '2088670377@vtext.com'
+        msg['Subject'] = ''
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login('markflory1@gmail.com', gmail_password)
+            server.send_message(msg)
+        print(f"SMS sent: {message}")
+        return True
+    except Exception as e:
+        print(f"SMS failed: {str(e)}")
+        return False
 
 # ============================================================
 # RENTCAST API FUNCTIONS
@@ -322,6 +348,7 @@ def run_rentcast_dump():
 
     if not RENTCAST_API_KEY:
         print("ERROR: RENTCAST_API_KEY not found in .env!")
+        send_sms("BRI RentCast FAILED - No API key found")
         return False
 
     # Get starting stats
@@ -339,71 +366,84 @@ def run_rentcast_dump():
     print(f"\n[2] Processing {len(BOISE_ZIP_CODES)} ZIP codes...")
     print("-" * 70)
 
-    for i, zip_code in enumerate(BOISE_ZIP_CODES, 1):
-        print(f"\n  ZIP {zip_code} ({i}/{len(BOISE_ZIP_CODES)}):")
+    try:
+        for i, zip_code in enumerate(BOISE_ZIP_CODES, 1):
+            print(f"\n  ZIP {zip_code} ({i}/{len(BOISE_ZIP_CODES)}):")
 
-        # Fetch listings from RentCast
-        listings = fetch_all_leased_with_pagination(zip_code)
-        pages = max(1, (len(listings) // RESULTS_LIMIT) + 1)
-        total_api_calls += pages
+            # Fetch listings from RentCast
+            listings = fetch_all_leased_with_pagination(zip_code)
+            pages = max(1, (len(listings) // RESULTS_LIMIT) + 1)
+            total_api_calls += pages
 
-        print(f"    Total fetched: {len(listings)} leased listings")
+            print(f"    Total fetched: {len(listings)} leased listings")
 
-        # Save with fresh connection per batch
-        if listings:
-            inserted, updated = upsert_listings_with_reconnect(
-                listings, dump_date
-            )
-            print(f"    Saved: {inserted} new, {updated} updated")
-        else:
-            inserted, updated = 0, 0
-            print(f"    No listings to save")
+            # Save with fresh connection per batch
+            if listings:
+                inserted, updated = upsert_listings_with_reconnect(
+                    listings, dump_date
+                )
+                print(f"    Saved: {inserted} new, {updated} updated")
+            else:
+                inserted, updated = 0, 0
+                print(f"    No listings to save")
 
-        total_fetched += len(listings)
-        total_inserted += inserted
-        total_updated += updated
+            total_fetched += len(listings)
+            total_inserted += inserted
+            total_updated += updated
 
-        zip_results.append({
-            'zip': zip_code,
-            'fetched': len(listings),
-            'inserted': inserted,
-            'updated': updated
-        })
+            zip_results.append({
+                'zip': zip_code,
+                'fetched': len(listings),
+                'inserted': inserted,
+                'updated': updated
+            })
 
-    # Final stats
-    print("\n[3] Getting final statistics...")
-    after_stats = get_table_stats()
+        # Final stats
+        print("\n[3] Getting final statistics...")
+        after_stats = get_table_stats()
 
-    end_time = datetime.now()
-    duration = (end_time - start_time).seconds
+        end_time = datetime.now()
+        duration = (end_time - start_time).seconds
 
-    print("\n" + "=" * 70)
-    print("DUMP COMPLETE - SUMMARY REPORT")
-    print("=" * 70)
-    print(f"\nDump Date: {dump_date}")
-    print(f"Duration: {duration} seconds")
-    print(f"API Calls Used: {total_api_calls}")
-    print(f"\nThis Dump:")
-    print(f"  Records fetched: {total_fetched:,}")
-    print(f"  New records: {total_inserted:,}")
-    print(f"  Updated records: {total_updated:,}")
-    print(f"\nDatabase Totals:")
-    print(f"  Total leased records: {after_stats['leased']:,}")
-    print(f"  Previous count: {before_stats['leased']:,}")
-    net_new = after_stats['leased'] - before_stats['leased']
-    print(f"  Net new records: {net_new:,}")
-    print(f"\nZIP Code Breakdown:")
-    print(f"  {'ZIP':<10} {'Fetched':<10} {'New':<10} {'Updated':<10}")
-    print(f"  {'-'*42}")
-    for r in zip_results:
-        print(f"  {r['zip']:<10} {r['fetched']:<10} "
-              f"{r['inserted']:<10} {r['updated']:<10}")
-    print("=" * 70)
-    print("RentCast dump completed successfully!")
-    print(f"Total leased comps available: {after_stats['leased']:,}")
-    print("=" * 70)
+        print("\n" + "=" * 70)
+        print("DUMP COMPLETE - SUMMARY REPORT")
+        print("=" * 70)
+        print(f"\nDump Date: {dump_date}")
+        print(f"Duration: {duration} seconds")
+        print(f"API Calls Used: {total_api_calls}")
+        print(f"\nThis Dump:")
+        print(f"  Records fetched: {total_fetched:,}")
+        print(f"  New records: {total_inserted:,}")
+        print(f"  Updated records: {total_updated:,}")
+        print(f"\nDatabase Totals:")
+        print(f"  Total leased records: {after_stats['leased']:,}")
+        print(f"  Previous count: {before_stats['leased']:,}")
+        net_new = after_stats['leased'] - before_stats['leased']
+        print(f"  Net new records: {net_new:,}")
+        print(f"\nZIP Code Breakdown:")
+        print(f"  {'ZIP':<10} {'Fetched':<10} {'New':<10} {'Updated':<10}")
+        print(f"  {'-'*42}")
+        for r in zip_results:
+            print(f"  {r['zip']:<10} {r['fetched']:<10} "
+                  f"{r['inserted']:<10} {r['updated']:<10}")
+        print("=" * 70)
+        print("RentCast dump completed successfully!")
+        print(f"Total leased comps available: {after_stats['leased']:,}")
+        print("=" * 70)
 
-    return True
+        send_sms(
+            f"BRI RentCast Done! "
+            f"{total_fetched:,} fetched, "
+            f"{total_inserted:,} new, "
+            f"{total_updated:,} updated. "
+            f"Total leased: {after_stats['leased']:,}"
+        )
+        return True
+
+    except Exception as e:
+        print(f"FATAL ERROR: {str(e)}")
+        send_sms(f"BRI RentCast FAILED - {str(e)[:80]}")
+        return False
 
 if __name__ == "__main__":
     success = run_rentcast_dump()
