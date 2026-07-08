@@ -1065,9 +1065,8 @@ def run_comp_selection_and_report(
 
         st.markdown("### Step 2 — Select Your Comps")
         st.markdown(
-            "Review the comps below. "
-            "**Select at least 3 leased and 1 active** "
-            "then click Generate Report. "
+            "Review the comps below and select the ones "
+            "you want to use, then click Generate Report. "
             "Click 🏠 to view any property on Zillow."
         )
 
@@ -1145,18 +1144,10 @@ def run_comp_selection_and_report(
 
         st.markdown("---")
 
-        # Validate minimums
-        leased_ok = len(selected_leased) >= 3
-        active_ok = len(selected_active) >= 1
-
-        if not leased_ok:
+        if len(selected_leased) + len(selected_active) == 0:
             st.warning(
-                f"Please select at least 3 leased comps "
-                f"(currently {len(selected_leased)} selected)"
-            )
-        if not active_ok and active_comps:
-            st.warning(
-                "Please select at least 1 active listing"
+                "No comps selected — your report may be "
+                "incomplete."
             )
 
         # --------------------------------------------------------
@@ -1164,16 +1155,11 @@ def run_comp_selection_and_report(
         # --------------------------------------------------------
         st.markdown("### Step 3 — Generate Market Report")
 
-        can_generate = leased_ok and (
-            active_ok or not active_comps
-        )
-
         if st.button(
             "📊 Generate Market Report",
             type="primary",
             use_container_width=True,
-            key=f"generate_report_{tab_key}",
-            disabled=not can_generate
+            key=f"generate_report_{tab_key}"
         ):
             subject_with_notes = dict(subject)
             subject_with_notes["notes"] = notes
