@@ -943,6 +943,37 @@ def get_reports_for_property(property_id, limit=10):
         return []
 
 # ============================================================
+# MANUAL ADDRESS LOOKUP
+# ============================================================
+
+def lookup_property_by_address(search_text):
+    """
+    Search the properties table for an address match.
+    Case-insensitive partial match on the address column.
+    Returns the first matching property dict, or None.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT address, city, state, zipcode,
+               bedrooms, bathrooms, current_price, home_type
+        FROM properties
+        WHERE address ILIKE %s
+        LIMIT 1
+    """, (f"%{search_text}%",))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    columns = ['address', 'city', 'state', 'zipcode',
+               'bedrooms', 'bathrooms', 'current_price', 'home_type']
+    return {col: clean_value(val) for col, val in zip(columns, row)}
+
+# ============================================================
 # SUBJECT PROPERTIES AND STATS
 # ============================================================
 

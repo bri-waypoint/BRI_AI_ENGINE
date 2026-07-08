@@ -28,7 +28,8 @@ from config.database import (
     save_property_notes,
     get_property_notes,
     save_analysis_report,
-    get_reports_for_property
+    get_reports_for_property,
+    lookup_property_by_address
 )
 
 from bri_ai_engine import (
@@ -903,6 +904,36 @@ with st.sidebar:
         )
     else:
         st.warning("RentCast disabled — Vault only")
+
+    st.markdown("---")
+    with st.expander("🔍 Look Up a Specific Property"):
+        lookup_text = st.text_input(
+            "Address",
+            placeholder="Enter full address (e.g. 123 Main St, Boise, ID 83702)",
+            label_visibility="collapsed",
+            key="manual_lookup_text"
+        )
+        if st.button("Look Up", key="manual_lookup_button"):
+            match = lookup_property_by_address(lookup_text)
+            if match:
+                price = match.get('current_price')
+                rent_display = (
+                    f"${price:,.0f}" if price is not None else "N/A"
+                )
+                st.success(
+                    f"**{match['address']}, {match['city']}, "
+                    f"{match['state']} {match['zipcode']}**\n\n"
+                    f"Beds: {match['bedrooms']} | "
+                    f"Baths: {match['bathrooms']} | "
+                    f"Rent: {rent_display} | "
+                    f"Type: {match['home_type']}"
+                )
+            else:
+                st.warning(
+                    "This property wasn't found in the current "
+                    "Vault. It may appear after the next "
+                    "scheduled scrape on Monday or Thursday."
+                )
 
     st.markdown("---")
     st.markdown("### How Search Works")
