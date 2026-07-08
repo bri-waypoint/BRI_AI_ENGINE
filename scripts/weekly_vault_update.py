@@ -202,8 +202,8 @@ def wait_for_snapshot(snapshot_id, max_checks=115, interval=60):
 
         if state == 'ready':
             log(f"   Snapshot ready after {check} checks!")
-            log(f"   Waiting 90 seconds for data to finalize...")
-            time.sleep(90)
+            log(f"   Waiting 120 seconds for data to finalize...")
+            time.sleep(120)
             return True
         elif state in ['failed', 'error']:
             log(f"   Snapshot failed!")
@@ -225,8 +225,8 @@ def download_snapshot(snapshot_id):
         f"/{snapshot_id}?format=json"
     )
 
-    for attempt in range(1, 6):
-        log(f"   Download attempt {attempt}/5...")
+    for attempt in range(1, 16):
+        log(f"   Download attempt {attempt}/15...")
 
         req = urllib.request.Request(
             download_url,
@@ -247,8 +247,8 @@ def download_snapshot(snapshot_id):
                         if status in ['building', 'starting']:
                             log(f"   Still building: "
                                 f"{data.get('message', '')} "
-                                f"- waiting 30s...")
-                            time.sleep(30)
+                                f"- waiting 60s...")
+                            time.sleep(60)
                             continue
 
                         # Check for data in wrapper keys
@@ -288,13 +288,13 @@ def download_snapshot(snapshot_id):
 
         except urllib.error.HTTPError as e:
             log(f"   HTTP {e.code}: {e.reason}")
-            if attempt < 5:
-                log(f"   Waiting 30s before retry...")
-                time.sleep(30)
+            if attempt < 15:
+                log(f"   Waiting 60s before retry...")
+                time.sleep(60)
         except Exception as e:
             log(f"   Error: {str(e)[:80]}")
-            if attempt < 5:
-                time.sleep(30)
+            if attempt < 15:
+                time.sleep(60)
 
     log("   All download attempts failed")
     return []
