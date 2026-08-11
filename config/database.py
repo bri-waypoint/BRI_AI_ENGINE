@@ -83,26 +83,31 @@ def get_bounding_box(lat, lon, radius_miles):
 
 def geocode_address(address, city, state, zipcode=''):
     """
-    Geocode an address using OpenStreetMap Nominatim (FREE).
-    Returns (latitude, longitude) or (None, None) if not found.
+    Geocode an address using three layers:
+    1. OpenStreetMap Nominatim (free)
+    2. Google Geocoding API (fallback for new construction)
+    3. Returns None, None if both fail
     """
     full_address = f"{address}, {city}, {state}"
     if zipcode:
         full_address += f" {zipcode}"
     full_address += ", USA"
 
-    url = "https://nominatim.openstreetmap.org/search"
-    params = {
-        "q": full_address,
-        "format": "json",
-        "limit": 1,
-        "countrycodes": "us"
-    }
-    headers = {
-        "User-Agent": "BRI-Geocoder/1.0 (Boise Rental Intelligence)"
-    }
-
+    # --------------------------------------------------------
+    # LAYER 1: OpenStreetMap Nominatim (free, try first)
+    # --------------------------------------------------------
     try:
+        url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": full_address,
+            "format": "json",
+            "limit": 1,
+            "countrycodes": "us"
+        }
+        headers = {
+            "User-Agent": "BRI-Geocoder/1.0 "
+                         "(Boise Rental Intelligence)"
+        }
         response = requests.get(
             url, params=params,
             headers=headers,
@@ -113,12 +118,75 @@ def geocode_address(address, city, state, zipcode=''):
             if results:
                 lat = float(results[0]['lat'])
                 lon = float(results[0]['lon'])
-                if 42.0 <= lat <= 49.0 and -117.5 <= lon <= -111.0:
+                # Validate coords are in Idaho region
+                if (42.0 <= lat <= 49.0 and
+                        -117.5 <= lon <= -111.0):
+                    print(f"Geocoded via Nominatim: "
+                          f"{lat}, {lon}")
                     return lat, lon
-        return None, None
+                else:
+                    print(f"Nominatim returned coords "
+                          f"outside Idaho: {lat}, {lon}")
     except Exception as e:
-        print(f"Geocoding error: {str(e)}")
-        return None, None
+        print(f"Nominatim geocoding error: {str(e)}")
+
+    # --------------------------------------------------------
+    # LAYER 2: Google Geocoding API (new construction fallback)
+    # --------------------------------------------------------
+    try:
+        import os
+        import streamlit as st
+
+        google_key = (
+            os.getenv('GOOGLE_STREET_VIEW_KEY') or
+            st.secrets.get('GOOGLE_STREET_VIEW_KEY')
+        )
+
+        if google_key:
+            import urllib.parse
+            encoded = urllib.parse.quote(full_address)
+            google_url = (
+                f"https://maps.googleapis.com/maps/api/geocode/json"
+                f"?address={encoded}"
+                f"&key={google_key}"
+                f"&region=us"
+                f"&components=administrative_area:ID|country:US"
+            )
+            g_response = requests.get(
+                google_url, timeout=10
+            )
+            if g_response.status_code == 200:
+                g_data = g_response.json()
+                if g_data.get('status') == 'OK':
+                    location = (
+                        g_data['results'][0]
+                        ['geometry']['location']
+                    )
+                    lat = float(location['lat'])
+                    lon = float(location['lng'])
+                    # Validate coords are in Idaho region
+                    if (42.0 <= lat <= 49.0 and
+                            -117.5 <= lon <= -111.0):
+                        print(f"Geocoded via Google: "
+                              f"{lat}, {lon}")
+                        return lat, lon
+                    else:
+                        print(f"Google returned coords "
+                              f"outside Idaho: {lat}, {lon}")
+                else:
+                    print(f"Google geocoding status: "
+                          f"{g_data.get('status')}")
+        else:
+            print("No Google API key available for fallback")
+
+    except Exception as e:
+        print(f"Google geocoding error: {str(e)}")
+
+    # --------------------------------------------------------
+    # LAYER 3: Both failed
+    # --------------------------------------------------------
+    print(f"All geocoding failed for: {full_address}")
+    return None, None
 
 # ============================================================
 # PROPERTY TYPE HELPERS

@@ -1614,9 +1614,66 @@ with main_tab2:
             if (not saved.get("latitude") or
                     not saved.get("longitude")):
                 st.error(
-                    "Could not geocode this address. "
-                    "Please check and try again."
+                    "Could not geocode this address "
+                    "automatically."
                 )
+                st.warning(
+                    "This may be a new subdivision not "
+                    "yet in our mapping database. "
+                    "You can enter coordinates manually:"
+                )
+                col1, col2 = st.columns(2)
+                with col1:
+                    manual_lat = st.number_input(
+                        "Latitude",
+                        min_value=42.0,
+                        max_value=49.0,
+                        value=43.6150,
+                        format="%.6f",
+                        key="manual_lat"
+                    )
+                with col2:
+                    manual_lon = st.number_input(
+                        "Longitude",
+                        min_value=-117.5,
+                        max_value=-111.0,
+                        value=-116.2023,
+                        format="%.6f",
+                        key="manual_lon"
+                    )
+                st.caption(
+                    "💡 To find coordinates: go to "
+                    "Google Maps, right-click the "
+                    "property location, and click "
+                    "the coordinates at the top "
+                    "of the menu to copy them."
+                )
+                if st.button(
+                    "Use Manual Coordinates",
+                    key="manual_coords_btn"
+                ):
+                    saved["latitude"] = manual_lat
+                    saved["longitude"] = manual_lon
+                    st.session_state["oo_subject"] = saved
+                    st.session_state["oo_ready"] = True
+                    st.session_state[
+                        "comps_ready_oneoff"
+                    ] = False
+                    st.session_state[
+                        "comp_result_oneoff"
+                    ] = None
+                    st.session_state[
+                        "report_ready_oneoff"
+                    ] = False
+                    st.session_state[
+                        "report_result_oneoff"
+                    ] = None
+                    st.success(
+                        f"Using manual coordinates: "
+                        f"{manual_lat:.4f}, "
+                        f"{manual_lon:.4f}"
+                    )
+                    st.rerun()
             else:
                 st.success(
                     f"Property geocoded! Coordinates: "
